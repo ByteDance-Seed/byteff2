@@ -1,0 +1,30 @@
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.15059210      -2.54815099      -0.50411476
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.19817854      -2.72411343      -0.58641148
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.24576498      -2.90007587      -0.66870820
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.31714464      -3.16401953      -0.79215328
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.42421413      -3.55993502      -0.97732091
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.60266328      -4.21979417      -1.28593361
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       0.95956158      -5.53951247      -1.90315903
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       1.31645989      -6.85923077      -2.52038444
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       1.67335819      -8.17894907      -3.13760986
+1
+Properties=species:S:1:pos:R:3 name=LI mapped_smiles="[Li+:1]" pbc="F F F"
+Li       2.03025649      -9.49866737      -3.75483527

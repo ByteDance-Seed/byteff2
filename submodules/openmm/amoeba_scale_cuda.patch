@@ -1,0 +1,160 @@
+From b8217ecfc205320ab33c0eedc844cdffeb430f5e Mon Sep 17 00:00:00 2001
+From: "wen.yan" <wen.yan@bytedance.com>
+Date: Fri, 27 Sep 2024 02:42:41 +0800
+Subject: [PATCH] cpu and cuda results agree
+
+---
+ .../src/kernels/multipoleElectrostatics.cc    | 25 +++++++++++++------
+ .../common/src/kernels/multipoleFixedField.cc | 21 +++++++++++-----
+ .../src/kernels/pmeMultipoleElectrostatics.cc | 25 +++++++++++++------
+ 3 files changed, 49 insertions(+), 22 deletions(-)
+
+diff --git a/plugins/amoeba/platforms/common/src/kernels/multipoleElectrostatics.cc b/plugins/amoeba/platforms/common/src/kernels/multipoleElectrostatics.cc
+index 7c737e4c5..4d43f8b00 100644
+--- a/plugins/amoeba/platforms/common/src/kernels/multipoleElectrostatics.cc
++++ b/plugins/amoeba/platforms/common/src/kernels/multipoleElectrostatics.cc
+@@ -60,6 +60,13 @@ DEVICE float computePScaleFactor(uint2 covalent, unsigned int polarizationGroup,
+     return (x && y ? 0.0f : (x && p ? 0.5f : 1.0f));
+ }
+ 
++DEVICE float computeScaleFactor(uint2 covalent, int index) {
++    int mask = 1<<index;
++    bool x = (covalent.x & mask);
++    bool y = (covalent.y & mask);
++    return (x ? (y ? 0.0f : 0.5f) : (y ? 1.0f : 1.0f));
++}
++
+ DEVICE void computeOneInteraction(AtomData* atom1, LOCAL_ARG AtomData* atom2, bool hasExclusions, float dScale, float pScale, float mScale, float forceFactor, mixed* energy) {
+     // Compute the displacement.
+     
+@@ -435,10 +442,11 @@ KERNEL void computeElectrostatics(
+             for (unsigned int j = 0; j < TILE_SIZE; j++) {
+                 int atom2 = y*TILE_SIZE+j;
+                 if (atom1 != atom2 && atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+-                    float d = computeDScaleFactor(polarizationGroup, j);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, j);
+-                    float m = computeMScaleFactor(covalent, j);
+-                    computeOneInteraction(&data, &localData[tbx+j], true, d, p, m, 0.5f, &energy);
++                    // float d = computeDScaleFactor(polarizationGroup, j);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, j);
++                    // float m = computeMScaleFactor(covalent, j);
++                    float p = computeScaleFactor(covalent, j);
++                    computeOneInteraction(&data, &localData[tbx+j], true, p, p, p, 0.5f, &energy);
+                 }
+             }
+             data.force *= -ENERGY_SCALE_FACTOR;
+@@ -463,10 +471,11 @@ KERNEL void computeElectrostatics(
+             for (j = 0; j < TILE_SIZE; j++) {
+                 int atom2 = y*TILE_SIZE+tj;
+                 if (atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+-                    float d = computeDScaleFactor(polarizationGroup, tj);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, tj);
+-                    float m = computeMScaleFactor(covalent, tj);
+-                    computeOneInteraction(&data, &localData[tbx+tj], true, d, p, m, 1, &energy);
++                    // float d = computeDScaleFactor(polarizationGroup, tj);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, tj);
++                    // float m = computeMScaleFactor(covalent, tj);
++                    float p = computeScaleFactor(covalent, tj);
++                    computeOneInteraction(&data, &localData[tbx+tj], true, p, p, p, 1, &energy);
+                 }
+                 tj = (tj + 1) & (TILE_SIZE - 1);
+             }
+diff --git a/plugins/amoeba/platforms/common/src/kernels/multipoleFixedField.cc b/plugins/amoeba/platforms/common/src/kernels/multipoleFixedField.cc
+index 8bccfc6fc..bfa82e746 100644
+--- a/plugins/amoeba/platforms/common/src/kernels/multipoleFixedField.cc
++++ b/plugins/amoeba/platforms/common/src/kernels/multipoleFixedField.cc
+@@ -433,6 +433,13 @@ DEVICE float computePScaleFactor(uint2 covalent, unsigned int polarizationGroup,
+     return (x && y ? 0.0f : (x && p ? 0.5f : 1.0f));
+ }
+ 
++DEVICE float computeScaleFactor(uint2 covalent, int index) {
++    int mask = 1<<index;
++    bool x = (covalent.x & mask);
++    bool y = (covalent.y & mask);
++    return (x ? (y ? 0.0f : 0.5f) : (y ? 1.0f : 1.0f));
++}
++
+ /**
+  * Compute nonbonded interactions.
+  */
+@@ -502,9 +509,10 @@ KERNEL void computeFixedField(
+                 int atom2 = y*TILE_SIZE+j;
+                 if (atom1 != atom2 && atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+                     real3 fields[4];
+-                    float d = computeDScaleFactor(polarizationGroup, j);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, j);
+-                    computeOneInteraction(&data, &localData[tbx+j], delta, d, p, fields);
++                    // float d = computeDScaleFactor(polarizationGroup, j);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, j);
++                    float p = computeScaleFactor(covalent, j);
++                    computeOneInteraction(&data, &localData[tbx+j], delta, p, p, fields);
+                     data.field += fields[0];
+                     data.fieldPolar += fields[1];
+                 }
+@@ -540,9 +548,10 @@ KERNEL void computeFixedField(
+                 int atom2 = y*TILE_SIZE+tj;
+                 if (atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+                     real3 fields[4];
+-                    float d = computeDScaleFactor(polarizationGroup, tj);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, tj);
+-                    computeOneInteraction(&data, &localData[tbx+tj], delta, d, p, fields);
++                    // float d = computeDScaleFactor(polarizationGroup, tj);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, tj);
++                    float p = computeScaleFactor(covalent, tj);
++                    computeOneInteraction(&data, &localData[tbx+tj], delta, p, p, fields);
+                     data.field += fields[0];
+                     data.fieldPolar += fields[1];
+                     localData[tbx+tj].field += fields[2];
+diff --git a/plugins/amoeba/platforms/common/src/kernels/pmeMultipoleElectrostatics.cc b/plugins/amoeba/platforms/common/src/kernels/pmeMultipoleElectrostatics.cc
+index 4b4301ae4..cef7a5a9f 100644
+--- a/plugins/amoeba/platforms/common/src/kernels/pmeMultipoleElectrostatics.cc
++++ b/plugins/amoeba/platforms/common/src/kernels/pmeMultipoleElectrostatics.cc
+@@ -60,6 +60,13 @@ DEVICE float computePScaleFactor(uint2 covalent, unsigned int polarizationGroup,
+     return (x && y ? 0.0f : (x && p ? 0.5f : 1.0f));
+ }
+ 
++DEVICE float computeScaleFactor(uint2 covalent, int index) {
++    int mask = 1<<index;
++    bool x = (covalent.x & mask);
++    bool y = (covalent.y & mask);
++    return (x ? (y ? 0.0f : 0.5f) : (y ? 1.0f : 1.0f));
++}
++
+ DEVICE void computeOneInteraction(AtomData* atom1, LOCAL_ARG AtomData* atom2, bool hasExclusions, float dScale, float pScale, float mScale, float forceFactor,
+                                       mixed* energy, real4 periodicBoxSize, real4 invPeriodicBoxSize, real4 periodicBoxVecX, real4 periodicBoxVecY, real4 periodicBoxVecZ) {
+     // Compute the displacement.
+@@ -499,10 +506,11 @@ KERNEL void computeElectrostatics(
+             for (unsigned int j = 0; j < TILE_SIZE; j++) {
+                 int atom2 = y*TILE_SIZE+j;
+                 if (atom1 != atom2 && atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+-                    float d = computeDScaleFactor(polarizationGroup, j);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, j);
+-                    float m = computeMScaleFactor(covalent, j);
+-                    computeOneInteraction(&data, &localData[tbx+j], true, d, p, m, 0.5f, &energy, periodicBoxSize, invPeriodicBoxSize, periodicBoxVecX, periodicBoxVecY, periodicBoxVecZ);
++                    // float d = computeDScaleFactor(polarizationGroup, j);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, j);
++                    // float m = computeMScaleFactor(covalent, j);
++                    float p = computeScaleFactor(covalent, j);
++                    computeOneInteraction(&data, &localData[tbx+j], true, p, p, p, 0.5f, &energy, periodicBoxSize, invPeriodicBoxSize, periodicBoxVecX, periodicBoxVecY, periodicBoxVecZ);
+                 }
+             }
+             if (atom1 < NUM_ATOMS)
+@@ -529,10 +537,11 @@ KERNEL void computeElectrostatics(
+             for (j = 0; j < TILE_SIZE; j++) {
+                 int atom2 = y*TILE_SIZE+tj;
+                 if (atom1 < NUM_ATOMS && atom2 < NUM_ATOMS) {
+-                    float d = computeDScaleFactor(polarizationGroup, tj);
+-                    float p = computePScaleFactor(covalent, polarizationGroup, tj);
+-                    float m = computeMScaleFactor(covalent, tj);
+-                    computeOneInteraction(&data, &localData[tbx+tj], true, d, p, m, 1, &energy, periodicBoxSize, invPeriodicBoxSize, periodicBoxVecX, periodicBoxVecY, periodicBoxVecZ);
++                    // float d = computeDScaleFactor(polarizationGroup, tj);
++                    // float p = computePScaleFactor(covalent, polarizationGroup, tj);
++                    // float m = computeMScaleFactor(covalent, tj);
++                    float p = computeScaleFactor(covalent, tj);
++                    computeOneInteraction(&data, &localData[tbx+tj], true, p, p, p, 1, &energy, periodicBoxSize, invPeriodicBoxSize, periodicBoxVecX, periodicBoxVecY, periodicBoxVecZ);
+                 }
+                 tj = (tj + 1) & (TILE_SIZE - 1);
+             }
+-- 
+2.39.5
+

@@ -1,0 +1,44 @@
+From 116f8269aadf2cd99b992743c709299196640339 Mon Sep 17 00:00:00 2001
+From: "wen.yan" <wen.yan@bytedance.com>
+Date: Wed, 25 Sep 2024 07:38:28 +0800
+Subject: [PATCH] modify amoeba mdp scale
+
+---
+ .../SimTKReference/AmoebaReferenceMultipoleForce.cpp | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/plugins/amoeba/platforms/reference/src/SimTKReference/AmoebaReferenceMultipoleForce.cpp b/plugins/amoeba/platforms/reference/src/SimTKReference/AmoebaReferenceMultipoleForce.cpp
+index 2a5e1e13a..74a7486cc 100644
+--- a/plugins/amoeba/platforms/reference/src/SimTKReference/AmoebaReferenceMultipoleForce.cpp
++++ b/plugins/amoeba/platforms/reference/src/SimTKReference/AmoebaReferenceMultipoleForce.cpp
+@@ -77,21 +77,21 @@ void AmoebaReferenceMultipoleForce::initialize()
+     _mScale[index++]      = 0.0;
+     _mScale[index++]      = 0.0;
+     _mScale[index++]      = 0.0;
+-    _mScale[index++]      = 0.4;
+-    _mScale[index++]      = 0.8;
++    _mScale[index++]      = 0.5;
++    _mScale[index++]      = 1.0;
+ 
+     index                 = 0;
+     _dScale[index++]      = 0.0;
+-    _dScale[index++]      = 1.0;
+-    _dScale[index++]      = 1.0;
+-    _dScale[index++]      = 1.0;
++    _dScale[index++]      = 0.0;
++    _dScale[index++]      = 0.0;
++    _dScale[index++]      = 0.5;
+     _dScale[index++]      = 1.0;
+ 
+     index                 = 0;
+     _pScale[index++]      = 0.0;
+     _pScale[index++]      = 0.0;
+     _pScale[index++]      = 0.0;
+-    _pScale[index++]      = 1.0;
++    _pScale[index++]      = 0.5;
+     _pScale[index++]      = 1.0;
+ 
+     index                 = 0;
+-- 
+2.39.5
+

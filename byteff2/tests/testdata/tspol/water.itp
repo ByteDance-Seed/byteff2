@@ -1,0 +1,20 @@
+; ITP file created by ByteFF-ML, 2024-10-10 15:08:51.086416
+
+[ moleculetype ]
+;name             nrexcl
+ water                   3
+
+[ atoms ]
+;       nr            type      resi   res      atom      cgnr      charge          mass ; qtot
+         1            o0bf         1   UNL        o0         1    -0.81340       15.9990 ; qtot   -0.813
+         2            h1bf         1   UNL        h1         2     0.40670        1.0080 ; qtot   -0.407
+         3            h2bf         1   UNL        h2         3     0.40670        1.0080 ; qtot    0.000
+
+[ bonds ]
+;       ai        aj funct               r               k
+         1         2     1        0.097390   463560.181738    ;  uncertainty r = 0.000241, k = 5.919162
+         1         3     1        0.097390   463560.232813    ;  uncertainty r = 0.000241, k = 5.919141
+
+[ angles ]
+;       ai        aj        ak funct           theta             cth
+         2         1         3     1      106.619049      478.128745    ;  uncertainty theta = 0.006873, k = 0.142814

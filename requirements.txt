@@ -1,0 +1,17 @@
+numpy~=1.26.4
+torch==2.6.0
+ase==3.22.1
+rdkit==2024.9.6
+tqdm~=4.67.1 
+pytest~=8.4.1
+MDAnalysis==2.9.0
+pandas~=2.3.1
+h5py~=3.14.0
+PyYAML==6.0.2
+GitPython~=3.1.45
+torch-geometric==2.6.1
+Sella==2.3.5
+pytest-xdist~=3.5
+
+isort~=6.0.1
+pylint~=3.3.8

@@ -1,0 +1,22 @@
+[ atomtypes ]
+;name           bonded.type        at.num        mass        charge   ptype           sigma         epsilon
+ c0bf                                   6      0.0000       0.00000       A     3.39682e-01     4.51654e-01    ;  uncertainty sigma = 0.000022, epsilon = 0.001680
+ c1bf                                   6      0.0000       0.00000       A     3.39733e-01     4.50605e-01    ;  uncertainty sigma = 0.000007, epsilon = 0.001981
+ c2bf                                   6      0.0000       0.00000       A     3.39656e-01     4.50409e-01    ;  uncertainty sigma = 0.000030, epsilon = 0.001605
+ c3bf                                   6      0.0000       0.00000       A     3.39698e-01     4.52150e-01    ;  uncertainty sigma = 0.000032, epsilon = 0.001795
+ o4bf                                   8      0.0000       0.00000       A     3.24101e-01     3.91037e-01    ;  uncertainty sigma = 0.000066, epsilon = 0.001479
+ h5bf                                   1      0.0000       0.00000       A     2.60068e-01     8.69944e-02    ;  uncertainty sigma = 0.000028, epsilon = 0.000815
+ h6bf                                   1      0.0000       0.00000       A     2.60068e-01     8.69943e-02    ;  uncertainty sigma = 0.000028, epsilon = 0.000815
+ h7bf                                   1      0.0000       0.00000       A     2.60068e-01     8.69943e-02    ;  uncertainty sigma = 0.000028, epsilon = 0.000815
+ h8bf                                   1      0.0000       0.00000       A     2.59997e-01     8.68192e-02    ;  uncertainty sigma = 0.000019, epsilon = 0.000218
+ h9bf                                   1      0.0000       0.00000       A     2.59997e-01     8.68192e-02    ;  uncertainty sigma = 0.000019, epsilon = 0.000218
+ h10bf                                  1      0.0000       0.00000       A     2.60035e-01     8.70902e-02    ;  uncertainty sigma = 0.000026, epsilon = 0.001014
+ h11bf                                  1      0.0000       0.00000       A     2.60035e-01     8.70900e-02    ;  uncertainty sigma = 0.000026, epsilon = 0.001014
+ h12bf                                  1      0.0000       0.00000       A     2.42218e-01     8.64119e-02    ;  uncertainty sigma = 0.000044, epsilon = 0.000600
+ h13bf                                  1      0.0000       0.00000       A     2.42218e-01     8.64119e-02    ;  uncertainty sigma = 0.000044, epsilon = 0.000600
+ h14bf                                  1      0.0000       0.00000       A     5.39129e-02     1.93239e-02    ;  uncertainty sigma = 0.000160, epsilon = 0.000848
+
+;name           bonded.type        at.num        mass        charge   ptype           sigma         epsilon
+ o0bf                                   8      0.0000       0.00000       A     3.30400e-01     4.04847e-01    ;  uncertainty sigma = 0.000457, epsilon = 0.014783
+ h1bf                                   1      0.0000       0.00000       A     6.03533e-02     2.05079e-02    ;  uncertainty sigma = 0.001405, epsilon = 0.003870
+ h2bf                                   1      0.0000       0.00000       A     6.03532e-02     2.05078e-02    ;  uncertainty sigma = 0.001405, epsilon = 0.003870

@@ -1,0 +1,143 @@
+# config for train MLFFParams
+
+meta:
+  work_folder: ./training_logs
+  random_seed: 42
+  fp64: false
+  print_grad: false
+  save_debug_data: false
+
+dataset:
+
+  - config: ./processed_data/dataset_config.yaml
+    batch_size: 96
+    shuffle: true
+    cluster: true
+    train_ratio: 0.9
+    loss_weight: 1.0
+    loss:
+      - loss_type: InterEnergyPolMSE
+        weight: 1.0
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyDispMSE
+        weight: 1.0
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyElecPauliMSE
+        weight: 1.0
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyCTMSE
+        weight: 1.0
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyMSE
+        weight: 10.0
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+    aux_loss:
+      - loss_type: InterEnergyPolMSE
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyDispMSE
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyElecPauliMSE
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyCTMSE
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyMSE
+        kwargs:
+          force_cutoff: [50., 80.]
+          clamp: 10.
+          decay: 2.
+      - loss_type: InterEnergyPolMSE
+      - loss_type: InterEnergyDispMSE
+      - loss_type: InterEnergyElecPauliMSE
+      - loss_type: InterEnergyCTMSE
+      - loss_type: InterEnergyMSE
+
+model:
+  check_point: ../../byteff2/trained_models/optimal.pt
+  graph_block:
+    feature_layer:
+      atom_embedding_dim: 32
+      node_mlp_dims: [64, 256, 2]  # (hidden, out, layers)
+      edge_mlp_dims: [64, 256, 2]  # (hidden, out, layers)
+      act: gelu
+    gnn_layer:
+      gnn_type: EGT
+      gnn_dims: [256, 256, 4]  # (hidden, out, layers)
+      jk: cat
+      act: gelu
+      heads: 16
+      at_channels: 16
+      ffn_dims: [256, 2]  # (hidden, layers)
+  ff_block:
+    - type: MMBondedConj
+      pre_mlp_dims: [256, 256, 3]  # (hidden, out, layers)
+      post_mlp_dims: [256, 256, 1]  # (hidden, out, layers)
+      out_mlp_dims: [256, 4]  # (hidden, layers)
+      tanh_output: 20.
+      act: gelu
+    - type: ChargeVolume
+      pre_mlp_dims: [256, 256, 3]  # (hidden, out, layers)
+      out_mlp_dims: [256, 3]  # (hidden, layers)
+      act: gelu
+    - type: Exp6Pol
+      pre_mlp_dims: [256, 256, 3]  # (hidden, out, layers)
+      out_mlp_dims: [256, 3]  # (hidden, layers)
+      act: gelu
+      ind14: 0.5
+      charge14: 0.5
+      vdw14: 0.5
+      pol_damping_factor: 0.39
+      s12: 1.5
+      disp_damping_factor: 120.
+      li_damp_clip: 0.2
+      fix_li_alpha: 1.0e-6
+
+training:
+  valid_interval: 4
+  ckpt_interval: 12
+
+  max_epoch: 99999
+  
+  grad_clip: 1.0
+  optimizer:
+    type: RAdam
+    lr:
+      Graph: 0.
+      MMBondedConj: 0.
+      ChargeVolume: 2.0e-5
+      Exp6Pol: 2.0e-4
+  scheduler:
+    type: ReduceLROnPlateau
+    factor: 0.5
+    patience: 8
+    threshold_mode: abs
+    threshold: 1.0e-09
+
+  early_stop_patience: 20
+  ignore_tolerance: 1.0e-06

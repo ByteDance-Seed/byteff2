@@ -1,0 +1,20 @@
+[ defaults ]
+; nbfunc        comb-rule       gen-pairs       fudgeLJ     fudgeQQ
+1               3               yes             0.5         0.5
+
+[ atomtypes ]
+; include atp/itp files here 
+
+#include "combine.atp"
+#include "butanol.itp"
+#include "water.itp"
+
+[ system ]
+; Name
+dimer
+
+[ molecules ]
+; Compound        #mols
+
+butanol 1
+water 1

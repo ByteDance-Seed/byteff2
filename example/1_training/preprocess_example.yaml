@@ -1,0 +1,20 @@
+data_cls: ClusterData
+meta_fp: example_data/meta.txt
+save_dir: processed_data
+
+confdata:
+  coords: coords
+  charge_transfer_int_energy: charge_transfer_int_energy
+  disp_int_energy: disp_int_energy
+  elec_pauli_int_energy: elec_pauli_int_energy
+  frozen_int_energy: frozen_int_energy
+  polarization_int_energy: polarization_int_energy
+  preparation_int_energy: preparation_int_energy
+  total_int_energy: total_int_energy
+  cls_elec_int_energy: cls_elec_int_energy
+  elec_int_energy: elec_int_energy
+  min_dists: min_dists
+
+kwargs:
+  max_n_confs: 20
+shards: 1

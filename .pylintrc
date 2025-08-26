@@ -1,0 +1,51 @@
+[MASTER]
+ignore-paths=.*deprecated.*.py, .*scripts.*.py
+init-hook='import os,sys; sys.path.append(os.path.abspath(os.path.dirname(__file__)))'
+
+[FORMAT]
+max-line-length=120
+ignore-long-lines=^\s*# .*https?://\S+.*\S$
+
+
+[MESSAGES CONTROL]
+disable=
+    missing-docstring,
+    broad-exception-caught,
+    no-member,
+    no-name-in-module,
+    no-self-argument,
+    invalid-name,
+    c-extension-no-member,
+    consider-using-f-string,
+    fixme,
+    use-dict-literal,
+    use-list-literal,
+    consider-using-set-comprehension,
+    consider-using-in,
+    consider-using-from-import,
+    useless-return,
+    too-many-branches,
+    unspecified-encoding,
+    useless-object-inheritance,
+    consider-iterating-dictionary,
+    consider-using-dict-items,
+    no-else-continue,
+    protected-access,
+    too-many-public-methods,
+    consider-using-enumerate,
+    superfluous-parens,
+    no-else-return,
+    arguments-differ,
+    unused-argument,
+    import-outside-toplevel,
+    consider-using-generator,
+    too-many-statements,
+    duplicate-code,
+    logging-fstring-interpolation,
+
+
+[DESIGN]
+max-args=12
+max-locals=50
+min-public-methods=1
+max-attributes=25
