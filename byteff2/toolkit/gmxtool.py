@@ -188,5 +188,84 @@ def ffparams_to_tfs(ffparams: dict[str, torch.Tensor], data: GraphData, mol: Mol
     assert td.comb_rule == LJCombinationRuleEnum.SIGMA_EPSILON
     assert td.gen_pairs == "yes"
     assert np.isclose(td.fudge_lj, 0.5)
-    assert np.isclose(td.fudge_qq, 0.83333)
+    assert np.isclose(td.fudge_qq, 0.5), f"fudge_qq is {td.fudge_qq}"
     return tfs
+
+
+class GMXScript:
+
+    def __init__(self) -> None:
+        self.script = []
+        self.index = 0
+
+        add_flag = """#!/bin/bash
+
+set -xe
+
+# Default values
+ratio=1.0
+
+# Loop through command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -r|--ratio)
+            ratio="$2"
+            shift 2
+            ;;
+        *) # Unknown option
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done"""
+
+        self.add(add_flag)
+        self.used_gro = []
+
+    def add(self, line: str):
+        if not line.endswith("\n"):
+            line = line + "\n"
+        self.script.append(line)
+
+    def init_gro_box(self, init_gro: str, box: float):
+        self.add(f"default_box_size={box}")
+        self.add('box_size=$(awk "BEGIN {print $default_box_size*$ratio}")')
+        self.add(f"gmx editconf -f {init_gro} -o {self.output_gro} -box $box_size $box_size $box_size")
+        self.index += 1
+
+    def scale(self, scale: float):
+        self.add(f"gmx editconf -f {self.input_gro} -o {self.output_gro} -scale {scale}")
+        self.index += 1
+
+    def insert_molecules(self, gro: str, num: int, try_count: int = 15000):
+        self.add(
+            f"gmx insert-molecules -f {self.input_gro} -ci {gro} -o {self.output_gro} -nmol {num} -try {try_count}")
+        self.used_gro.append(gro)
+        self.index += 1
+
+    def genconf(self, init_gro: str, box: int):
+        assert init_gro.endswith(".gro"), "gro file is required."
+        self.add(f"gmx genconf -f {init_gro} -o {self.output_gro} -nbox {box}")
+        self.index += 1
+
+    def finish(self):
+        target_name = "solvent_salt.gro"
+        self.add(f"mv {self.input_gro} {target_name}")
+        # remove all the intermediate files
+        self.add("rm -f conf_*.gro")
+
+    def write(self, file: str):
+        with open(file, 'w') as f:
+            f.write(self.export)
+
+    @property
+    def input_gro(self):
+        return f"conf_{self.index}.gro"
+
+    @property
+    def output_gro(self):
+        return f"conf_{self.index+1}.gro"
+
+    @property
+    def export(self):
+        return '\n'.join(self.script)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import logging
 import os
 from typing import Optional
@@ -93,6 +94,8 @@ def npt_run(
     temperature: float = 300,
     work_dir: str = '.',
 ):
+    top = copy.deepcopy(top)
+    system = copy.deepcopy(system)
     timestep = 2  # fs
     pressure = 1.0 * ou.atmospheres  # Target pressure
     frequency = 12  # Attempt volume change every 25 steps
@@ -121,13 +124,18 @@ def npt_run(
         totalSteps=None,
         append=False,
     )
+    dcd_reporter = app.DCDReporter(
+        os.path.join(work_dir, 'npt.dcd'),
+        reportInterval=500,
+        enforcePeriodicBox=False,
+    )
     return openmm_run(
         task_name='npt',
         top=top,
         system=system,
         positions=positions,
         integrator=integrator,
-        reporter=state_reporter,
+        reporter=[state_reporter, dcd_reporter],
         work_dir=work_dir,
         minimize=True,
         steps=npt_steps,
@@ -140,17 +148,16 @@ def rescale_box(
     box_vec: list[omm.Vec3],
     work_dir: str = None,
 ):
-    with temporary_cd(work_dir):
-        # use average density
-        csv_file = os.path.join(work_dir, 'npt_state.csv')
-        box = pd.read_csv(csv_file)["Box Volume (nm^3)"]
-        ave_length = np.mean(box[-500:])**(1 / 3)  # last 1 ns
-        scale = ave_length / box_vec[0].x
-        positions *= scale
-        new_box_vec = []
-        for vec in box_vec:
-            new_box_vec.append(omm.Vec3(vec.x * scale, vec.y * scale, vec.z * scale) * ou.nanometers)
-        logger.info('scale box by %.3f', scale)
+    # use average density
+    csv_file = os.path.join(work_dir, 'npt_state.csv')
+    box = pd.read_csv(csv_file)["Box Volume (nm^3)"]
+    ave_length = np.mean(box[-500:])**(1 / 3)  # last 1 ns
+    scale = ave_length / box_vec[0].x
+    positions *= scale
+    new_box_vec = []
+    for vec in box_vec:
+        new_box_vec.append(omm.Vec3(vec.x * scale, vec.y * scale, vec.z * scale) * ou.nanometers)
+    logger.info('scale box by %.3f', scale)
     return positions, new_box_vec
 
 
@@ -164,6 +171,8 @@ def nvt_run(
         nvt_steps: int,
         timestep: int = 2  # fs
 ):
+    top = copy.deepcopy(top)
+    system = copy.deepcopy(system)
     integrator = omm.MTSLangevinIntegrator(temperature * ou.kelvin, 0.1 / ou.picosecond, timestep * ou.femtoseconds,
                                            [(0, 2), (1, 1)])
 

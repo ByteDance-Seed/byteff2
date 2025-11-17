@@ -66,7 +66,10 @@ def nx_covalent_map_and_pairs(natoms: int, pairs: Iterable) -> tuple[dict]:
     return covalent_map, pair_recs
 
 
-def build_system(top_file, nonbonded_params: dict, unit_cell=None, cutoff=1.0) -> tuple[GromacsTopFile, omm.System]:
+def generate_openmm_system(top_file,
+                           nonbonded_params: dict,
+                           unit_cell=None,
+                           cutoff=1.0) -> tuple[GromacsTopFile, omm.System]:
     """ Build openmm system for ByteFF-Pol """
 
     assert isinstance(top_file, str) and top_file.endswith('.top'), 'input system must be a full gromacs topology'
@@ -276,7 +279,7 @@ class AmoebaCalculator(BaseCalculator):
 
         self.system: omm.System = None
 
-        self.top, self.system = build_system(top_file, nonbonded_params, unit_cell=unit_cell, cutoff=cutoff)
+        self.top, self.system = generate_openmm_system(top_file, nonbonded_params, unit_cell=unit_cell, cutoff=cutoff)
 
         self.integrator = omm.VerletIntegrator(0.001 * openmm_unit.picoseconds)
         self.platform = omm.Platform.getPlatformByName(platform_name)

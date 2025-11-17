@@ -48,6 +48,24 @@ All required Python packages are listed in requirements.txt. To install them, ru
 ```
 pip install -r requirements.txt
 ```
+### Installing Gromacs
+Download Gromacs from [official website](https://manual.gromacs.org/documentation/current/download.html).
+```
+wget https://ftp.gromacs.org/gromacs/gromacs-2025.3.tar.gz
+```
+
+To install Gromacs, please refer to the [official documentation](https://manual.gromacs.org/documentation/current/install-guide/index.html).
+```
+tar xfz gromacs-2025.3.tar.gz
+cd gromacs-2025.3
+mkdir build
+cd build
+cmake .. -DGMX_BUILD_OWN_FFTW=ON -DREGRESSIONTEST_DOWNLOAD=ON
+make
+make check
+sudo make install
+source /usr/local/gromacs/bin/GMXRC
+```
 
 ### Installing OpenMM for ByteFF2
 
@@ -89,7 +107,7 @@ The model and configuration file are available on HuggingFace [byteff2](https://
 To download the model and configuration file, run:
 ```
 pip install -U "huggingface_hub[cli]"
-hf download ByteDance-Seed/byteff2 --exclude *.md .gitattributes --local-dir byteff2
+hf download ByteDance-Seed/byteff2 --local-dir byteff2
 ```
 
 ## Quick Start
@@ -99,6 +117,7 @@ You can refer to several examples in the · directory; more details are availabl
 * `example/2_compare_qm` contains scripts to compare QM and FF energies.
 * `example/3_write_params` contains scripts to generate force field parameters using trained ByteFF-Pol model.
 * `example/4_MD_simulations` contains scripts for molecular dynamics (MD) simulations using ByteFF-Pol.
+* `example/5_similarity` contains scripts for similarity analysis using ByteFF-Pol.
 
 ## Run Tests
 You can verify the environments by running the tests:

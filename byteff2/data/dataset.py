@@ -95,6 +95,10 @@ class IMDataset(Dataset[T]):
         super().__init__()
 
         self.config = DatasetConfig(config)
+        if isinstance(config, str):
+            self.save_dir = os.path.dirname(config)
+        else:
+            self.save_dir = self.config.get('save_dir')
         self.rank = rank
         self.world_size = world_size
         self.shards = self.config.get('shards')
@@ -135,10 +139,7 @@ class IMDataset(Dataset[T]):
 
     @property
     def processed_names(self) -> list[str]:
-        return [
-            os.path.join(self.config.get('save_dir'), f'processed_data_shard{shard_id}.pkl')
-            for shard_id in self.shard_ids
-        ]
+        return [os.path.join(self.save_dir, f'processed_data_shard{shard_id}.pkl') for shard_id in self.shard_ids]
 
     def check_exist(self):
         assert all([os.path.exists(name) for name in self.processed_names

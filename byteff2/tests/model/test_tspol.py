@@ -30,7 +30,7 @@ torch.set_default_dtype(torch.float32)
 
 device_ = 'cpu'
 pme_ = False
-model_dir = get_data_file_path('optimal.pt', 'byteff2.trained_models')
+model_dir = get_data_file_path('trained_models/optimal.pt', 'byteff2')
 trained_model = load_model(os.path.dirname(model_dir))
 butol_xyz = get_data_file_path("tspol/butanol.xyz", "byteff2.tests.testdata")
 butol_top = get_data_file_path("tspol/butanol.top", "byteff2.tests.testdata")

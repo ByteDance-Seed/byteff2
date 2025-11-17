@@ -212,7 +212,12 @@ class GraphData(Data):
         mol = Molecule.from_mapped_smiles(mapped_smiles, name=name) if mol is None else mol
         pf6_flag = mol.get_smiles() == 'F[P-](F)(F)(F)(F)F'
         if pf6_flag:
-            assert mol.atomic_numbers[0] == 15
+            if mol.atomic_numbers[0] == 15:
+                pf6_flag = 1
+            elif mol.atomic_numbers[1] == 15:
+                pf6_flag = 2
+            else:
+                raise RuntimeError("P should be the first or second atom in PF6")
         self.mol_name = name
         self.mapped_smiles = mol.get_mapped_smiles(isomeric=False)
         self.set_count('mol', 1)
@@ -250,8 +255,12 @@ class GraphData(Data):
         for term, width in MMTERM_WIDTH.items():
             atomidxs = topos[MM_TOPO_MAP[term]]
             if pf6_flag and term is MMTerm.angle:
-                atomidxs = [(1, 0, 2), (1, 0, 3), (1, 0, 5), (1, 0, 6), (2, 0, 3), (2, 0, 4), (2, 0, 6), (3, 0, 4),
-                            (3, 0, 5), (4, 0, 5), (4, 0, 6), (5, 0, 6)]
+                if pf6_flag == 1:
+                    atomidxs = [(1, 0, 2), (1, 0, 3), (1, 0, 5), (1, 0, 6), (2, 0, 3), (2, 0, 4), (2, 0, 6), (3, 0, 4),
+                                (3, 0, 5), (4, 0, 5), (4, 0, 6), (5, 0, 6)]
+                else:
+                    atomidxs = [(0, 1, 2), (0, 1, 3), (0, 1, 5), (0, 1, 6), (2, 1, 3), (2, 1, 4), (2, 1, 6), (3, 1, 4),
+                                (3, 1, 5), (4, 1, 5), (4, 1, 6), (5, 1, 6)]
             index = torch.tensor(atomidxs, dtype=int_dtype).reshape(-1, width)
             self[f'inc_node_{term.name}'] = index
             self.set_count(term.name, len(atomidxs))

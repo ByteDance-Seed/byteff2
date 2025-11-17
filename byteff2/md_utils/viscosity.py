@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Zheng Gong
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates.
-# SPDX-License-Identifier: MIT 
+# SPDX-License-Identifier: MIT
 #
 # This file has been modified by ByteDance Ltd. and/or its affiliates. on 2025.08.25
 #
@@ -11,6 +11,8 @@
 
 # The ViscosityReporter is modified from https://github.com/z-gong/openmm-velocityVerlet/blob/master/examples/ommhelper/reporter/viscosityreporter.py
 
+import copy
+import os
 from typing import Optional
 
 import openmm as omm
@@ -103,6 +105,8 @@ def nonequ_run(
     work_dir: str,
     nonequ_steps: int,
 ):
+    top = copy.deepcopy(top)
+    system = copy.deepcopy(system)
     from velocityverletplugin import VVIntegrator
     timestep = 1  # fs, MTS is not supported in VVIntegrator
     integrator = VVIntegrator(
@@ -116,7 +120,7 @@ def nonequ_run(
     )
     integrator.setUseMiddleScheme(True)
     integrator.setCosAcceleration(0.02)  # in openmm standard unit nm/ps^2
-    vis_reporter = ViscosityReporter('viscosity.csv', 50)
+    vis_reporter = ViscosityReporter(os.path.join(work_dir, 'viscosity.csv'), 50)
     return openmm_run(
         task_name='nonequ',
         top=top,
