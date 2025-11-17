@@ -25,7 +25,7 @@ from bytemol.utils import get_data_file_path
 
 if __name__ == '__main__':
 
-    model_dir = get_data_file_path('optimal.pt', 'byteff2.trained_models')
+    model_dir = get_data_file_path('trained_models/optimal.pt', 'byteff2')
     model = load_model(os.path.dirname(model_dir))
 
     src = os.path.abspath('./dimer_data')

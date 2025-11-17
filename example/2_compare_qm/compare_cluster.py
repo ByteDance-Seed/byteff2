@@ -60,7 +60,7 @@ def get_ff_energy(model, _mols, conformer=0):
 if __name__ == '__main__':
 
     position_restraint = 1.0
-    model_dir = get_data_file_path('optimal.pt', 'byteff2.trained_models')
+    model_dir = get_data_file_path('trained_models/optimal.pt', 'byteff2')
     trained_model = load_model(os.path.dirname(model_dir))
 
     src = os.path.abspath('./cluster_data')

@@ -3,28 +3,33 @@ This example demonstrates how to perform molecular dynamics (MD) simulations usi
 
 ## Overview
 The MD simulations example shows how to:
-* Run NPT (constant pressure and temperature) simulations for density calculations
+* Run NPT simulations for density calculations
 * Run liquid and gas phase simulations to evaluate evaporation enthalpy (Hvap).
-* Run simulation for electrolyte and compute viscosity and conductivity.
+* Conduct a simulation to compute transport properties such as viscosity, conductivity and so on.
 
 ## How to Run
-1. Density Calculation
-Run simulation using the parameters from `input_data`
+0. Set PYTHONPATH
 ```bash
-PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} python run_density.py
+export PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH}
 ```
-After simulation, the results are saved in `density_results/density_results.json`.
-
-2. Hvap Calculation
-Run simulation using the parameters from `input_data_hvap`
+1. Run MD simulations
+If you want to run MD simulations for density calculations, run:
 ```bash
-PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} python run_hvap.py
+python run_md.py --config density_config.json
 ```
-After simulation, the results are saved in `hvap_results/hvap_results.json`.
+The config files for other simulations, like evaporation enthalpy (Hvap) and transport properties, are also provided. To run these simulations, simply replace `density_config.json` with the corresponding config file.
 
-3. Transport Properties
-Run simulations using the parameters from `input_data`
-```bash 
-PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} python run_transport.py
-```
-After simulation, the results are saved in `transport_results/results.json`.
+## Configuration File Details (*_config.json)
+
+This configuration is used for running transport property simulations (viscosity and conductivity) on electrolyte systems:
+
+* **protocol**: "Transport" - Specifies the simulation protocol type, including `Transport`, `Density` and `HVap`.
+* **temperature**: 298 - Simulation temperature in Kelvin
+* **natoms**: 10000 - Total number of atoms in the box
+* **components**: Molecular composition with **molecule ratio**:
+  - **DMC**: 249 
+  - **EC**: 170 
+  - ...
+* **smiles**: SMILES strings for each component.
+  - **DMC**: "COC(=O)OC"
+  - ...

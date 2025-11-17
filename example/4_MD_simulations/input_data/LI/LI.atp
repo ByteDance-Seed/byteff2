@@ -1,5 +1,0 @@
-; ITP file created by ByteFF-ML, 2025-07-23 16:44:22.745874
-
-[ atomtypes ]
-;name           bonded.type        at.num        mass        charge   ptype           sigma         epsilon
- li0bf                                  3      0.0000       0.00000       A     0.00000e+00     0.00000e+00

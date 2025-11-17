@@ -1,7 +1,0 @@
-[ moleculetype ]
-;name             nrexcl
- LI                    3
-
-[ atoms ]
-;       nr            type      resi   res      atom      cgnr      charge          mass ; qtot
-         1           li0bf         1   UNL       li0         1     1.0        6.9410 ; qtot    1.000

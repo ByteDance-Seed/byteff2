@@ -1,17 +1,23 @@
 # QM vs FF Comparison Examples
 
 This example demonstrates how to compare quantum mechanical (QM) and force field (FF) energies for molecular dimers and clusters using `ByteFF-Pol`.
-The scripts reproduce the results presented in Figure 2 (b~f) of the ByteFF-Pol paper.
+The scripts reproduce the results presented in Figure 2 (a~f) of the ByteFF-Pol paper.
 
 ## Usage
+1. Dimer validation examples:
+```bash
+PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} OMP_NUM_THREADS=1 python dimer_validation.py
+```
+The results shown in Figure 2 (a) is reproduced (Fig2a.png).
+One can change the device to `cuda` for faster computation.
 
-1. For dimer comparison:
+2. Dimer scan examples:
 ```bash
 PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} OMP_NUM_THREADS=1 python compare_dimer.py
 ```
 Results will be saved in the `dimer_results` folder, which contains JSON files with decomposed interaction energies (predicted by ByteFF-Pol and QM references) and corresponding visualization images.
 
-2. For cluster comparison:
+3. Cluster optimization examples:
 ```bash
 PYTHONPATH=$(git rev-parse --show-toplevel):${PYTHONPATH} OMP_NUM_THREADS=1 python compare_cluster.py
 ```
