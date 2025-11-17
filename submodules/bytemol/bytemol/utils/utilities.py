@@ -1,6 +1,6 @@
 # Copyright (c) 2021 The Open Force Field Initiative
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates.
-# SPDX-License-Identifier: MIT 
+# SPDX-License-Identifier: MIT
 #
 # This file has been modified by ByteDance Ltd. and/or its affiliates. on 2025.08.25
 #

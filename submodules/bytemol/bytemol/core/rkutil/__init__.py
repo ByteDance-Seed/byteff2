@@ -18,6 +18,7 @@ from .information import get_mol_formula
 from .match_and_map import (add_atom_map_num, clear_atom_map_num, find_indices_mapping_between_isomorphic_mols,
                             find_indices_mapping_between_mols, find_mapped_smarts_matches, get_smiles,
                             is_atom_map_num_valid, renumber_atoms_with_atom_map_num)
+from .plot import show_mol
 from .resonance import get_canonical_resoner, get_resonance_structures
 from .sanitize import (apply_inplace_reaction, cleanup_rkmol_isotope, cleanup_rkmol_stereochemistry,
                        get_mol_from_smiles, normalization_transforms, normalize_rkmol, sanitize_rkmol)

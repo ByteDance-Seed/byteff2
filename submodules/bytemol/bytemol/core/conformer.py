@@ -185,10 +185,10 @@ class Conformer:
         atoms = self.to_ase_atoms(confkeys=confkeys)
         io_flag = 'a' if append else 'w'
         if isinstance(filename, io.StringIO):
-            write_extxyz(filename, atoms, append=append)
+            write_extxyz(filename, atoms)
         else:
             with open(filename, io_flag) as f:
-                write_extxyz(f, atoms, append=append)
+                write_extxyz(f, atoms)
 
     to_extxyz = to_xyz
 

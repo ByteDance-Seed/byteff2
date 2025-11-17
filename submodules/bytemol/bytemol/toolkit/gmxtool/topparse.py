@@ -289,7 +289,7 @@ class RecordDefaults(RecordText):
               comb_rule: LJCombinationRuleEnum = LJCombinationRuleEnum.SIGMA_EPSILON,
               gen_pairs: str = "yes",
               fudge_lj: float = 0.5,
-              fudge_qq: float = 1.0 / 1.2,
+              fudge_qq: float = 1.0 / 2.0,
               **kwargs):
         super()._init(**kwargs)
 

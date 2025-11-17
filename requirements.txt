@@ -1,6 +1,6 @@
 numpy~=1.26.4
 torch==2.6.0
-ase==3.22.1
+ase==3.24.0
 rdkit==2024.9.6
 tqdm~=4.67.1 
 pytest~=8.4.1
