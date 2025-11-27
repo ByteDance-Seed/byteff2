@@ -437,7 +437,7 @@ class HVapProtocol(Protocol):
     def run_protocol(self):
         logger.info('running hvap protocol')
         npt_steps = 1500000
-        nvt_steps = 1500000
+        nvt_steps = 5000000
         nonbonded_params = self.generate_ff_params(self.config['smiles'])
         self.components = self.build_system(
             self.config['natoms'],
@@ -511,7 +511,7 @@ class HVapProtocol(Protocol):
         e_gas = df["Potential Energy (kJ/mole)"]
         eg = []
         for _ in range(10):
-            eg.append(np.mean(np.random.choice(e_gas[2000:3000], 100)))
+            eg.append(np.mean(np.random.choice(e_gas[2000:], 100)))
         e_gas, e_gas_std = np.mean(eg), np.std(eg)
 
         hvap = (e_gas - e_liquid) / 4.184 + 8.314 * self.config['temperature'] / 1000 / 4.184  # kcal/mol

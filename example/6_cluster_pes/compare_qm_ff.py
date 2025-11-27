@@ -55,8 +55,8 @@ def main(args):
     trained_model = load_model(os.path.dirname(model_dir))
 
     root = args.md_samples_dir
-
-    save_dir = 'cluster_pes'
+    save_dir = args.save_dir
+    os.makedirs(save_dir, exist_ok=True)
     for cluster_name in os.listdir(root):
         src = os.path.join(root, cluster_name)
         if not os.path.exists(os.path.join(src, 'energy.json')):
@@ -108,6 +108,10 @@ if __name__ == '__main__':
     parser.add_argument('--md_samples_dir',
                         type=str,
                         default='./data/md_sample_examples',
+                        help='path to the sampled clusters')
+    parser.add_argument('--save_dir',
+                        type=str,
+                        default='./cluster_pes',
                         help='path to the sampled clusters')
     args = parser.parse_args()
 
