@@ -1,0 +1,20 @@
+{
+    "protocol": "Transport",
+    "params_dir": "transport_params",
+    "output_dir": "transport_results",
+    "working_dir": "transport_working_dir",
+    "temperature": 298,
+    "natoms": 10000,
+    "components": {
+        "DMC": 249,
+        "EC": 170,
+        "LI": 34,
+        "PF6": 34
+    },
+    "smiles": {
+        "DMC": "COC(=O)OC",
+        "EC": "O=C1OCCO1",
+        "LI": "[Li+]",
+        "PF6": "F[P-](F)(F)(F)(F)F"
+    }
+}
