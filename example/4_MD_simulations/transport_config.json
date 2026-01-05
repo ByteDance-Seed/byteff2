@@ -16,5 +16,11 @@
         "EC": "O=C1OCCO1",
         "LI": "[Li+]",
         "PF6": "F[P-](F)(F)(F)(F)F"
-    }
+    },
+    "compute_viscosity": true,
+    "compute_conductivity": true,
+    "msd_skip_frames": 200,
+    "fit_window_frames": [50, 200]
+    ,
+    "output_transference": true
 }

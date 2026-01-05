@@ -63,3 +63,30 @@ Notes:
 
 Notes on conductivity:
 - Conductivity is computed from the equilibrium NVT trajectory (`nvt.dcd`). The non-equilibrium run is only used to compute viscosity for Yeh–Hummer correction of diffusivities; Onsager conductivity itself does not require the non-equilibrium frames.
+
+Optional MSD/fit window controls (Transport):
+- `msd_skip_frames` (int, default 200): Number of initial NVT frames to discard before MSD/correlation analysis.
+- `fit_window_frames` ([start, end], default [50, 200]): Frame-index window used to linearly fit the kMSD/correlation to obtain slopes. Ensures at least two points.
+- `fit_window_frac` ([start_frac, end_frac], optional): Fractional window (0–1) of the analyzed frames; if provided, overrides `fit_window_frames`.
+
+Frame-to-time mapping:
+- With default settings, NVT saves a frame every 500 steps and timestep is 2 fs, so 1 frame ≈ 1 ps. If you change report intervals or timesteps, adjust the windows accordingly.
+
+Output labels for transport:
+- The results now include `species_labels`, `species_charges`, and `species_counts`, ordered consistently with the computed arrays (e.g., `Dself_inf`).
+- By default the order is: anions, then cations, then solvents (matching the composition order constructed in the protocol).
+- Example:
+  - `species_labels`: ["PF6", "LI", "EC", "DMC"]
+  - `Dself_inf`: [0.85, 1.10, 2.45, 2.30]  # 10^-10 m^2/s → PF6, LI, EC, DMC respectively
+
+Per-species outputs and transference numbers:
+- `Dself_raw` (10^-10 m^2/s): raw per-species self-diffusion (finite-size, before Yeh–Hummer).
+- `Dself_inf` (10^-10 m^2/s): Yeh–Hummer corrected per-species self-diffusion (if viscosity available).
+- `Lambda_raw`, `Lambda_com_removed` (10^-10 m^2/s): Einstein-form Onsager matrices before/after COM correction.
+- `output_transference` (bool, default false): when true, adds:
+  - `transference_numbers`: map from species label to transference number t_i (dimensionless) computed from Onsager L_hat.
+  - `t_plus_charge_+1` and `t_minus_charge_-1`: convenience keys when exactly one +1 and one −1 species exist.
+
+Notes:
+- The transference numbers are computed in the barycentric (mass-average) frame and do not require velocities.
+- For multi-cation or multi-anion systems with the same integer charge, species may be grouped unless distinct species are defined in the input topology and config.

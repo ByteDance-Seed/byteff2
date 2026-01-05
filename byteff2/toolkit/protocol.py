@@ -461,9 +461,39 @@ class TransportProtocol(Protocol):
         )
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
-        start_from = (self.config.get('start_from') or 'npt').lower() if isinstance(self.config, dict) else 'npt'
+        # Determine starting stage: honor explicit config, else infer from existing outputs when resuming
+        explicit_start = None
+        if isinstance(self.config, dict):
+            explicit_start = self.config.get('start_from')
+        start_from = (explicit_start or 'npt').lower()
         if start_from not in ('npt', 'nvt', 'nonequ'):
             start_from = 'npt'
+        if explicit_start is None and resume:
+            # Try to infer starting stage when resuming
+            cfg = self.config if isinstance(self.config, dict) else {}
+            nvt_markers = []
+            # User-provided NVT outputs
+            if isinstance(cfg, dict) and cfg.get('nvt_dcd'):
+                nvt_markers.append(cfg['nvt_dcd'])
+            if isinstance(cfg, dict) and cfg.get('nvt_state_csv'):
+                nvt_markers.append(cfg['nvt_state_csv'])
+            # Standard outputs under output_dir
+            nvt_markers.extend([
+                os.path.join(self.output_dir, 'nvt.chk'),
+                os.path.join(self.output_dir, 'nvt_state.csv'),
+                os.path.join(self.output_dir, 'nvt.dcd'),
+            ])
+            if any(p and os.path.isfile(p) for p in nvt_markers):
+                start_from = 'nvt'
+                logger.info('Auto-detected resume point: NVT artifacts exist; skipping NPT')
+            else:
+                npt_markers = [
+                    os.path.join(self.output_dir, 'npt.chk'),
+                    os.path.join(self.output_dir, 'npt_state.csv'),
+                ]
+                if any(os.path.isfile(p) for p in npt_markers):
+                    start_from = 'nvt'  # proceed directly to NVT using NPT state for rescaling
+                    logger.info('Auto-detected resume point: NPT artifacts exist; starting from NVT')
         compute_viscosity = bool(self.config.get('compute_viscosity', True)) if isinstance(self.config, dict) else True
 
         if start_from == 'npt':
@@ -493,11 +523,20 @@ class TransportProtocol(Protocol):
             )
         elif start_from == 'nvt':
             logger.info('start_from=nvt: skipping NPT and starting/resuming NVT')
+            # If NPT state CSV exists in output_dir, rescale box/positions to the averaged NPT density
+            npt_csv = os.path.join(self.output_dir, 'npt_state.csv')
+            if os.path.isfile(npt_csv):
+                rescale_positions, rescale_box_vec = rescale_box(input_positions, unit_cell, work_dir=self.output_dir)
+                nvt_seed_pos, nvt_seed_box = rescale_positions, rescale_box_vec
+                logger.info('Using rescaled GRO positions/box from NPT state for NVT')
+            else:
+                nvt_seed_pos, nvt_seed_box = input_positions, unit_cell
+                logger.info('NPT state not found; using GRO positions/box for NVT')
             nvt_positions, nvt_box_vec = nvt_run(
                 input_top,
                 input_system,
-                input_positions,
-                unit_cell,
+                nvt_seed_pos,
+                nvt_seed_box,
                 temperature=self.config['temperature'],
                 work_dir=self.output_dir,
                 nvt_steps=nvt_steps,
@@ -604,6 +643,22 @@ class TransportProtocol(Protocol):
             species_mass_dict = {k: species_mass_dict[k] for k in sorted_components_names}
             species_number_dict = {k: species_number_dict[k] for k in sorted_components_names}
 
+            # Optional MSD/fit window controls from config
+            skip_frames = int(cfg.get('msd_skip_frames', 200)) if isinstance(cfg, dict) else 200
+            fw_frames_cfg = cfg.get('fit_window_frames') if isinstance(cfg, dict) else None
+            if fw_frames_cfg is not None and isinstance(fw_frames_cfg, (list, tuple)) and len(fw_frames_cfg) == 2:
+                fw_frames = (int(fw_frames_cfg[0]), int(fw_frames_cfg[1]))
+            else:
+                fw_frames = (50, 200)
+            fw_frac_cfg = cfg.get('fit_window_frac') if isinstance(cfg, dict) else None
+            if fw_frac_cfg is not None and isinstance(fw_frac_cfg, (list, tuple)) and len(fw_frac_cfg) == 2:
+                fw_frac = (float(fw_frac_cfg[0]), float(fw_frac_cfg[1]))
+            else:
+                fw_frac = None
+
+            # Optional per-species transference numbers
+            output_transference = bool(cfg.get('output_transference', False)) if isinstance(cfg, dict) else False
+
             cond = onsager_calc(
                 species_mass_dict,
                 species_number_dict,
@@ -612,6 +667,10 @@ class TransportProtocol(Protocol):
                 vis,  # may be None; onsager_calc handles YH skip when None
                 md_temperature,
                 nvt_positions,
+                msd_skip_frames=skip_frames,
+                fit_window_frames=fw_frames,
+                fit_window_frac=fw_frac,
+                compute_transference=output_transference,
             )
             results.update(cond)
 

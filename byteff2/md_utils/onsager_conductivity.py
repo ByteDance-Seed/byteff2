@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import Union
+from typing import Union, Optional, Tuple
 
 import numpy as np
 import torch
@@ -369,13 +369,19 @@ def fsc_full_Lambda(dfsc: Union[float, torch.Tensor],
 unit = OnsagerUnit()
 
 
-def onsager_calc(species_mass,
-                 species_number,
-                 species_charge,
-                 volume_angstrom3,
-                 viscosity_cP,
-                 T_K,
-                 positions):
+def onsager_calc(
+    species_mass,
+    species_number,
+    species_charge,
+    volume_angstrom3,
+    viscosity_cP,
+    T_K,
+    positions,
+    msd_skip_frames: int = 200,
+    fit_window_frames: Tuple[int, int] = (50, 200),
+    fit_window_frac: Optional[Tuple[float, float]] = None,
+    compute_transference: bool = False,
+):
 
     dtype = torch.float64
     nsp = len(species_mass)
@@ -409,8 +415,18 @@ def onsager_calc(species_mass,
     Viscosity = viscosity_cP
     RoomT = T_K
 
-    np_xyz = positions[200:]
-    nt_start, nt_end = 50, 200
+    # Apply initial frame skip for equilibration/burn-in
+    np_xyz = positions[msd_skip_frames:]
+    # Determine fitting window either by fractional range or explicit frame indices
+    nwin = len(np_xyz)
+    if fit_window_frac is not None:
+        f0, f1 = fit_window_frac
+        # clamp and ensure at least two points
+        nt_start = max(0, int(f0 * nwin))
+        nt_end = max(nt_start + 2, int(f1 * nwin))
+    else:
+        nt_start, nt_end = int(fit_window_frames[0]), int(fit_window_frames[1])
+        nt_end = max(nt_start + 2, nt_end)
 
     xu = torch.from_numpy(np_xyz[:, :, 0])
     yu = torch.from_numpy(np_xyz[:, :, 1])
@@ -474,6 +490,13 @@ def onsager_calc(species_mass,
             kmsd_xy[i, j] = kmsd_xy[j, i]
 
     outdata = {}
+    # Preserve species ordering from input dicts for labeling
+    try:
+        outdata["species_labels"] = list(species_mass.keys())
+        outdata["species_charges"] = list(species_charge.values())
+        outdata["species_counts"] = list(species_number.values())
+    except Exception:  # safety for unexpected input types
+        pass
     outdata["cubic_box_length_unit"] = "angstrom"
     outdata["cubic_box_length"] = BoxLen
     outdata["conductivity_unit"] = "mS/cm"
@@ -495,6 +518,12 @@ def onsager_calc(species_mass,
     outdata["conductivity_onsager"] = sigma__o__md.item()
     outdata["conductivity_NE"] = sigma_ne__md.item()
     outdata["diffusivity_unit"] = "10^-10 m^2/s"
+    # Also expose raw (finite-size) self diffusion per species
+    outdata["Dself_raw"] = Dself_MD.tolist()
+    # Expose transport coefficients (Onsager Lambda) in the same species order
+    outdata["Lambda_unit"] = "10^-10 m^2/s"
+    outdata["Lambda_raw"] = RawLambda.tolist()
+    outdata["Lambda_com_removed"] = Lambda__md.tolist()
 
     # Yeh–Hummer finite-size correction requires viscosity
     if Viscosity is None or (isinstance(Viscosity, (int, float)) and Viscosity <= 0):
@@ -506,6 +535,26 @@ def onsager_calc(species_mass,
     DselfInf = Dself_MD + DYH1
     outdata["Dself_inf"] = DselfInf.tolist()
     outdata["yh_correction_applied"] = yh_applied
+
+    # Optional per-species transference numbers using Onsager matrix (SI)
+    if compute_transference:
+        Lambda_si = Lambda__md * (1.e-10 * unit.m**2 / unit.s)
+        L_si = Lambda_si * SpeciesCountsTotal / (BoxVolume * unit.angstrom**3) / (unit.kB * RoomT * unit.K)
+        denom = Charges.matmul(L_si).matmul(Charges)
+        if float(denom) != 0.0 and np.isfinite(float(denom)):
+            Lq = torch.matmul(L_si, Charges)
+            tivals = (Charges * Lq) / denom
+            try:
+                labels = list(species_mass.keys())
+            except Exception:
+                labels = [str(i) for i in range(len(tivals))]
+            outdata["transference_numbers"] = {labels[i]: float(tivals[i].item()) for i in range(len(tivals))}
+            # Convenience keys for single +1 and -1 species
+            charge_vals = list(species_charge.values())
+            plus_idx = [i for i, q in enumerate(charge_vals) if int(q) == 1]
+            minus_idx = [i for i, q in enumerate(charge_vals) if int(q) == -1]
+            outdata["t_plus_charge_+1"] = (float(tivals[plus_idx[0]].item()) if len(plus_idx) == 1 else None)
+            outdata["t_minus_charge_-1"] = (float(tivals[minus_idx[0]].item()) if len(minus_idx) == 1 else None)
 
     logger.info(f"msd_self: {DselfInf.tolist()}")
     logger.info(f"conductivity: {sigma__o__md.item()}")

@@ -202,18 +202,57 @@ def npt_run(
 
 def rescale_box(
     positions: list[omm.Vec3],
-    box_vec: list[omm.Vec3],
+    box_vec,
     work_dir: str = None,
 ):
+    """
+    Rescale positions and box vectors using the average NPT box length.
+
+    Accepts box_vec in multiple forms:
+    - tuple/list of three Vec3 (OpenMM periodic box vectors)
+    - a single Vec3 of lengths (Lx, Ly, Lz)
+    - a tuple/list of three floats (Lx, Ly, Lz) in nm
+    """
     # use average density
     csv_file = os.path.join(work_dir, 'npt_state.csv')
     box = pd.read_csv(csv_file)["Box Volume (nm^3)"]
-    ave_length = np.mean(box[-500:])**(1 / 3)  # last 1 ns
-    scale = ave_length / box_vec[0].x
+    ave_length = np.mean(box[-500:]) ** (1 / 3)  # last 1 ns
+
+    # Normalize input box specification
+    three_vec = None
+    # case 1: iterable of three Vec3
+    if isinstance(box_vec, (list, tuple)) and len(box_vec) == 3 and hasattr(box_vec[0], 'x'):
+        three_vec = True
+        Lx = float(box_vec[0].x)
+        Ly = float(box_vec[1].x if hasattr(box_vec[1], 'x') else box_vec[1][0])
+        Lz = float(box_vec[2].x if hasattr(box_vec[2], 'x') else box_vec[2][0])
+    # case 2: single Vec3 of lengths
+    elif hasattr(box_vec, 'x') and hasattr(box_vec, 'y') and hasattr(box_vec, 'z'):
+        three_vec = False
+        Lx, Ly, Lz = float(box_vec.x), float(box_vec.y), float(box_vec.z)
+    # case 3: iterable of three floats
+    elif isinstance(box_vec, (list, tuple)) and len(box_vec) == 3:
+        three_vec = False
+        Lx, Ly, Lz = float(box_vec[0]), float(box_vec[1]), float(box_vec[2])
+    else:
+        raise TypeError('Unsupported box_vec format for rescale_box')
+
+    scale = ave_length / Lx
     positions *= scale
-    new_box_vec = []
-    for vec in box_vec:
-        new_box_vec.append(omm.Vec3(vec.x * scale, vec.y * scale, vec.z * scale) * ou.nanometers)
+
+    if three_vec:
+        new_box_vec = [
+            omm.Vec3(Lx * scale, 0.0, 0.0) * ou.nanometers,
+            omm.Vec3(0.0, Ly * scale, 0.0) * ou.nanometers,
+            omm.Vec3(0.0, 0.0, Lz * scale) * ou.nanometers,
+        ]
+    else:
+        new_box_vec = [
+            omm.Vec3(Lx * scale, 0.0, 0.0) * ou.nanometers,
+            omm.Vec3(0.0, Ly * scale, 0.0) * ou.nanometers,
+            omm.Vec3(0.0, 0.0, Lz * scale) * ou.nanometers,
+        ]
+
     logger.info('scale box by %.3f', scale)
     return positions, new_box_vec
 
