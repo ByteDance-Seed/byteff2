@@ -115,6 +115,49 @@ def load_topo(topo_dir, mol_name):
     return component
 
 
+def _parse_molecules_from_top(top_path: str) -> dict[str, int]:
+    """Parse the [ molecules ] section of a GROMACS .top file and return counts.
+
+    This is a light-weight parser that looks for the first [ molecules ] section
+    and collects lines of form: "<name> <count>" ignoring comments and blanks.
+    """
+    counts = {}
+    if not os.path.isfile(top_path):
+        return counts
+    in_mol = False
+    with open(top_path, 'r') as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith(';'):
+                continue
+            if line.startswith('['):
+                # entering or leaving sections
+                in_mol = ('molecules' in line)
+                continue
+            if in_mol:
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[0]
+                    try:
+                        count = int(parts[1])
+                    except Exception:
+                        continue
+                    counts[name] = count
+    return counts
+
+
+def _read_last_step(csv_path: str) -> int:
+    try:
+        if not os.path.isfile(csv_path):
+            return 0
+        df = pd.read_csv(csv_path)
+        if 'Step' in df.columns and len(df['Step']) > 0:
+            return int(df['Step'].iloc[-1])
+    except Exception:
+        pass
+    return 0
+
+
 def generate_system_gro(components, working_dir, box):
     solvent = [c for c in components.values() if c.type == ComponentType.SOLVENT]
     cation = [c for c in components.values() if c.type == ComponentType.CATION]
@@ -188,21 +231,51 @@ class Protocol:
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
 
-    def generate_ff_params(self, component_smiles: dict):
+    def generate_ff_params(self, component_smiles: dict, force: bool = False):
         model_dir = get_data_file_path('trained_models/optimal.pt', 'byteff2')
         model = load_model(os.path.dirname(model_dir))
         all_nb_params = {}
 
         for mol_name, smiles in component_smiles.items():
-            logger.info(f'generating force field params for {mol_name}')
+            logger.info(f'preparing force field params for {mol_name}')
+            itp_fp = f'{self.params_dir}/{mol_name}.itp'
+            atp_fp = f'{self.params_dir}/{mol_name}.atp'
+            gro_fp = f'{self.params_dir}/{mol_name}.gro'
+            nb_meta_fp = f'{self.params_dir}/{mol_name}_nb_params.json'
+            params_json_fp = f'{self.params_dir}/{mol_name}.json'
+            have_all = all(os.path.isfile(p) for p in (itp_fp, atp_fp, gro_fp))
+            if have_all and not force:
+                # Load per-molecule params from cached JSON for OpenMM system build
+                if os.path.isfile(params_json_fp):
+                    try:
+                        with open(params_json_fp) as fh:
+                            all_nb_params[mol_name] = json.load(fh)
+                    except Exception:
+                        logger.warning('Failed to load %s; will regenerate', params_json_fp)
+                        have_all = False
+                else:
+                    have_all = False
+                # Try to load common metadata if not already
+                if 'metadata' not in all_nb_params and os.path.isfile(nb_meta_fp):
+                    try:
+                        with open(nb_meta_fp) as fh:
+                            meta_wrap = json.load(fh)
+                            if isinstance(meta_wrap, dict) and 'metadata' in meta_wrap:
+                                all_nb_params['metadata'] = meta_wrap['metadata']
+                    except Exception:
+                        pass
+                if have_all:
+                    logger.info(f'Found cached params for {mol_name}; skipping regeneration')
+                    continue
+            # Generate fresh params if any required file missing or forced
             mol = Molecule.from_smiles(smiles, nconfs=1)
             mol.name = mol_name
             metadata, params, tfs, mol = get_nb_params(model, mol)
             tfs.write_itp(f'{self.params_dir}/{mol.name}.itp', separated_atp=True)
             write_gro(mol, f'{self.params_dir}/{mol.name}.gro')
-            with open(f'{self.params_dir}/{mol.name}.json', 'w') as f:
+            with open(params_json_fp, 'w') as f:
                 json.dump(params, f, indent=2)
-            with open(f'{self.params_dir}/{mol.name}_nb_params.json', 'w') as file:
+            with open(nb_meta_fp, 'w') as file:
                 nb_params = {'metadata': metadata}
                 json.dump(nb_params, file, indent=2)
             all_nb_params[mol_name] = params
@@ -210,11 +283,39 @@ class Protocol:
 
         return all_nb_params
 
-    def build_system(self, total_atoms: int, components_ratio: dict, working_dir: str, build_gas: bool = False):
+    def build_system(self, total_atoms: int, components_ratio: dict, working_dir: str, build_gas: bool = False, reuse_if_exists: bool = True):
         logger.info(f'building system for {components_ratio.keys()}')
         # read and parse topo files
         os.makedirs(working_dir, exist_ok=True)
         components = {}
+        # Fast path: reuse previously packed system when resuming
+        if reuse_if_exists:
+            existing_gro = os.path.join(self.params_dir, 'solvent_salt.gro')
+            existing_top = os.path.join(self.params_dir, 'system.top')
+            if os.path.isfile(existing_gro) and os.path.isfile(existing_top):
+                logger.info('Reusing existing system.top and solvent_salt.gro; skipping re-pack')
+                # Derive composition from existing top
+                mol_counts = _parse_molecules_from_top(existing_top)
+                full_system_records, record_atomtype_names = [], []
+                system_charge = 0
+                for component_name, count in mol_counts.items():
+                    component = load_topo(self.params_dir, component_name)
+                    component.molar_ratio = 1  # placeholder; real counts set below
+                    component.molar_num = int(count)
+                    components[component_name] = component
+                    for record in component.atp_records.all:
+                        if isinstance(record, RecordAtomType):
+                            if record.name not in record_atomtype_names:
+                                record_atomtype_names.append(record.name)
+                                full_system_records.append(record)
+                        else:
+                            full_system_records.append(record)
+                    system_charge += component.molar_num * component.net_charge
+                    full_system_records.extend(component.itp_records.all)
+                assert int(system_charge) == 0, f"System charge should be 0, but got {system_charge}"
+                # Nothing else to do; assume existing files are valid
+                self.config['natoms'] = int(sum(len(c.atoms) * c.molar_num for c in components.values()))
+                return components
         full_system_records, record_atomtype_names = [], []
         system_charge = 0
         for component_name, molar_ratio in components_ratio.items():
@@ -361,11 +462,12 @@ class DensityProtocol(Protocol):
 
     def run_protocol(self):
         logger.info('running density protocol')
-        nonbonded_params = self.generate_ff_params(self.config['smiles'])
+        nonbonded_params = self.generate_ff_params(self.config['smiles'], force=bool(self.config.get('force_regenerate_params', False)))
         _ = self.build_system(
             self.config['natoms'],
             self.config['components'],
             self.config['working_dir'],
+            reuse_if_exists=bool(self.config.get('resume', False)),
         )
         gro_file = f"{self.params_dir}/solvent_salt.gro"
         top_file = f"{self.params_dir}/system.top"
@@ -379,6 +481,7 @@ class DensityProtocol(Protocol):
         )
 
         npt_steps = int(self.config.get('npt_steps', 1500000))
+        npt_timestep_fs = int(self.config.get('npt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
         npt_run(
@@ -390,6 +493,11 @@ class DensityProtocol(Protocol):
             work_dir=self.output_dir,
             resume=resume,
             checkpoint_interval=checkpoint_interval,
+            timestep=npt_timestep_fs,
+            state_csv_override=(self.config.get('npt_state_csv') if isinstance(self.config, dict) else None),
+            dcd_path_override=(self.config.get('npt_dcd') if isinstance(self.config, dict) else None),
+            resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+            resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
         )
         logger.info('Finished running density protocol')
 
@@ -431,10 +539,15 @@ class TransportProtocol(Protocol):
                     return int(cfg[steps_key])
             return int(default_steps)
 
-        npt_steps = steps_from_time(self.config, 'npt_steps', 4000000, time_ns_key='npt_time_ns', time_ps_key='npt_time_ps')
-        nvt_steps = steps_from_time(self.config, 'nvt_steps', 10000000, time_ns_key='nvt_time_ns', time_ps_key='nvt_time_ps')
-        # nonequilibrium run uses 1 fs timestep (VVIntegrator)
-        nonequ_steps = steps_from_time(self.config, 'nonequ_steps', 1000000, time_ns_key='nonequ_time_ns', time_ps_key='nonequ_time_ps', timestep_fs=1)
+        # Read timestep overrides (fs)
+        npt_timestep_fs = int(self.config.get('npt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
+        nvt_timestep_fs = int(self.config.get('nvt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
+        nonequ_timestep_fs = int(self.config.get('nonequ_timestep_fs', 1)) if isinstance(self.config, dict) else 1
+
+        npt_steps = steps_from_time(self.config, 'npt_steps', 4000000, time_ns_key='npt_time_ns', time_ps_key='npt_time_ps', timestep_fs=npt_timestep_fs)
+        nvt_steps = steps_from_time(self.config, 'nvt_steps', 10000000, time_ns_key='nvt_time_ns', time_ps_key='nvt_time_ps', timestep_fs=nvt_timestep_fs)
+        # nonequilibrium run uses VVIntegrator; default 1 fs unless overridden
+        nonequ_steps = steps_from_time(self.config, 'nonequ_steps', 1000000, time_ns_key='nonequ_time_ns', time_ps_key='nonequ_time_ps', timestep_fs=nonequ_timestep_fs)
         # Optional OpenMM platform/precision overrides via config
         if isinstance(self.config, dict):
             plat = self.config.get('openmm_platform')
@@ -443,11 +556,12 @@ class TransportProtocol(Protocol):
                 os.environ['BYTEFF2_OPENMM_PLATFORM'] = str(plat)
             if prec:
                 os.environ['BYTEFF2_OPENMM_PRECISION'] = str(prec)
-        nonbonded_params = self.generate_ff_params(self.config['smiles'])
+        nonbonded_params = self.generate_ff_params(self.config['smiles'], force=bool(self.config.get('force_regenerate_params', False)))
         self.components = self.build_system(
             self.config['natoms'],
             self.config['components'],
             self.config['working_dir'],
+            reuse_if_exists=bool(self.config.get('resume', False)),
         )
         gro_file = f"{self.params_dir}/solvent_salt.gro"
         top_file = f"{self.params_dir}/system.top"
@@ -461,7 +575,7 @@ class TransportProtocol(Protocol):
         )
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
-        # Determine starting stage: honor explicit config, else infer from existing outputs when resuming
+        # Determine starting stage: honor explicit config, else infer from progress when resuming
         explicit_start = None
         if isinstance(self.config, dict):
             explicit_start = self.config.get('start_from')
@@ -469,31 +583,23 @@ class TransportProtocol(Protocol):
         if start_from not in ('npt', 'nvt', 'nonequ'):
             start_from = 'npt'
         if explicit_start is None and resume:
-            # Try to infer starting stage when resuming
-            cfg = self.config if isinstance(self.config, dict) else {}
-            nvt_markers = []
-            # User-provided NVT outputs
-            if isinstance(cfg, dict) and cfg.get('nvt_dcd'):
-                nvt_markers.append(cfg['nvt_dcd'])
-            if isinstance(cfg, dict) and cfg.get('nvt_state_csv'):
-                nvt_markers.append(cfg['nvt_state_csv'])
-            # Standard outputs under output_dir
-            nvt_markers.extend([
-                os.path.join(self.output_dir, 'nvt.chk'),
-                os.path.join(self.output_dir, 'nvt_state.csv'),
-                os.path.join(self.output_dir, 'nvt.dcd'),
-            ])
-            if any(p and os.path.isfile(p) for p in nvt_markers):
+            # Infer based on completed steps: continue NPT/NVT until their targets are reached
+            npt_csv = os.path.join(self.output_dir, 'npt_state.csv')
+            # Allow override from config
+            if isinstance(self.config, dict) and self.config.get('npt_state_csv'):
+                npt_csv = self.config['npt_state_csv']
+            nvt_csv = os.path.join(self.output_dir, 'nvt_state.csv')
+            npt_done = _read_last_step(npt_csv) >= int(npt_steps)
+            nvt_done = _read_last_step(nvt_csv) >= int(nvt_steps)
+            if not npt_done:
+                start_from = 'npt'
+                logger.info('Resume: NPT incomplete (last=%d, target=%d); continuing NPT', _read_last_step(npt_csv), int(npt_steps))
+            elif not nvt_done:
                 start_from = 'nvt'
-                logger.info('Auto-detected resume point: NVT artifacts exist; skipping NPT')
+                logger.info('Resume: NVT incomplete (last=%d, target=%d); starting/resuming NVT', _read_last_step(nvt_csv), int(nvt_steps))
             else:
-                npt_markers = [
-                    os.path.join(self.output_dir, 'npt.chk'),
-                    os.path.join(self.output_dir, 'npt_state.csv'),
-                ]
-                if any(os.path.isfile(p) for p in npt_markers):
-                    start_from = 'nvt'  # proceed directly to NVT using NPT state for rescaling
-                    logger.info('Auto-detected resume point: NPT artifacts exist; starting from NVT')
+                start_from = 'nonequ'
+                logger.info('Resume: NPT and NVT targets reached; proceeding to nonequilibrium stage')
         compute_viscosity = bool(self.config.get('compute_viscosity', True)) if isinstance(self.config, dict) else True
 
         if start_from == 'npt':
@@ -507,8 +613,22 @@ class TransportProtocol(Protocol):
                 work_dir=self.output_dir,
                 resume=resume,
                 checkpoint_interval=checkpoint_interval,
+                timestep=npt_timestep_fs,
+                state_csv_override=(self.config.get('npt_state_csv') if isinstance(self.config, dict) else None),
+                dcd_path_override=(self.config.get('npt_dcd') if isinstance(self.config, dict) else None),
+                resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
             )
-            rescale_positions, rescale_box_vec = rescale_box(npt_positions, npt_box_vec, work_dir=self.output_dir)
+            # Allow overriding the NPT CSV location for rescaling
+            npt_csv_override = None
+            if isinstance(self.config, dict):
+                npt_csv_override = self.config.get('npt_state_csv')
+            rescale_positions, rescale_box_vec = rescale_box(
+                npt_positions,
+                npt_box_vec,
+                work_dir=self.output_dir,
+                csv_override=npt_csv_override,
+            )
             logger.info('nvt run')
             nvt_positions, nvt_box_vec = nvt_run(
                 input_top,
@@ -518,15 +638,29 @@ class TransportProtocol(Protocol):
                 temperature=self.config['temperature'],
                 work_dir=self.output_dir,
                 nvt_steps=nvt_steps,
+                timestep=nvt_timestep_fs,
                 resume=resume,
                 checkpoint_interval=checkpoint_interval,
+                state_csv_override=(self.config.get('nvt_state_csv') if isinstance(self.config, dict) else None),
+                dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
+                resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
             )
         elif start_from == 'nvt':
             logger.info('start_from=nvt: skipping NPT and starting/resuming NVT')
-            # If NPT state CSV exists in output_dir, rescale box/positions to the averaged NPT density
-            npt_csv = os.path.join(self.output_dir, 'npt_state.csv')
-            if os.path.isfile(npt_csv):
-                rescale_positions, rescale_box_vec = rescale_box(input_positions, unit_cell, work_dir=self.output_dir)
+            # If NPT state CSV exists, rescale box/positions to the averaged NPT density
+            npt_csv_default = os.path.join(self.output_dir, 'npt_state.csv')
+            npt_csv_override = None
+            if isinstance(self.config, dict):
+                npt_csv_override = self.config.get('npt_state_csv')
+            npt_csv_path = npt_csv_override if (npt_csv_override and os.path.isfile(npt_csv_override)) else npt_csv_default
+            if os.path.isfile(npt_csv_path):
+                rescale_positions, rescale_box_vec = rescale_box(
+                    input_positions,
+                    unit_cell,
+                    work_dir=self.output_dir,
+                    csv_override=npt_csv_path,
+                )
                 nvt_seed_pos, nvt_seed_box = rescale_positions, rescale_box_vec
                 logger.info('Using rescaled GRO positions/box from NPT state for NVT')
             else:
@@ -540,8 +674,13 @@ class TransportProtocol(Protocol):
                 temperature=self.config['temperature'],
                 work_dir=self.output_dir,
                 nvt_steps=nvt_steps,
+                timestep=nvt_timestep_fs,
                 resume=resume,
                 checkpoint_interval=checkpoint_interval,
+                state_csv_override=(self.config.get('nvt_state_csv') if isinstance(self.config, dict) else None),
+                dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
+                resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
             )
         else:  # start_from == 'nonequ'
             logger.info('start_from=nonequ: loading NVT outputs to seed nonequilibrium run')
@@ -591,6 +730,7 @@ class TransportProtocol(Protocol):
                 nonequ_steps=nonequ_steps,
                 resume=resume,
                 checkpoint_interval=checkpoint_interval,
+                timestep_fs=nonequ_timestep_fs,
             )
         else:
             logger.info('compute_viscosity is false; skipping nonequilibrium run')
@@ -688,7 +828,7 @@ class HVapProtocol(Protocol):
 
     def run_protocol(self):
         logger.info('running hvap protocol')
-        # Allow override by steps or time (2 fs timestep)
+        # Allow override by steps or time; timestep_fs configurable
         def steps_from_time(cfg, steps_key, default_steps, time_ns_key=None, time_ps_key=None, timestep_fs=2):
             if isinstance(cfg, dict):
                 if time_ns_key and cfg.get(time_ns_key) is not None:
@@ -699,19 +839,24 @@ class HVapProtocol(Protocol):
                     return int(cfg[steps_key])
             return int(default_steps)
 
-        npt_steps = steps_from_time(self.config, 'npt_steps', 1500000, time_ns_key='npt_time_ns', time_ps_key='npt_time_ps')
-        nvt_steps = steps_from_time(self.config, 'nvt_steps', 5000000, time_ns_key='nvt_time_ns', time_ps_key='nvt_time_ps')
-        nonbonded_params = self.generate_ff_params(self.config['smiles'])
+        npt_timestep_fs = int(self.config.get('npt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
+        nvt_timestep_fs = int(self.config.get('nvt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
+
+        npt_steps = steps_from_time(self.config, 'npt_steps', 1500000, time_ns_key='npt_time_ns', time_ps_key='npt_time_ps', timestep_fs=npt_timestep_fs)
+        nvt_steps = steps_from_time(self.config, 'nvt_steps', 5000000, time_ns_key='nvt_time_ns', time_ps_key='nvt_time_ps', timestep_fs=nvt_timestep_fs)
+        nonbonded_params = self.generate_ff_params(self.config['smiles'], force=bool(self.config.get('force_regenerate_params', False)))
         self.components = self.build_system(
             self.config['natoms'],
             self.config['components'],
             self.config['working_dir'],
+            reuse_if_exists=bool(self.config.get('resume', False)),
         )
         _ = self.build_system(
             self.config['natoms'],
             self.config['components'],
             self.config['working_dir'],
             build_gas=True,
+            reuse_if_exists=False,
         )
         gro_file = f"{self.params_dir}/solvent_salt.gro"
         top_file = f"{self.params_dir}/system.top"
@@ -738,6 +883,14 @@ class HVapProtocol(Protocol):
             work_dir=self.output_dir,
             resume=resume,
             checkpoint_interval=checkpoint_interval,
+            timestep=npt_timestep_fs,
+            state_csv_override=(self.config.get('npt_state_csv') if isinstance(self.config, dict) else None),
+            dcd_path_override=(self.config.get('npt_dcd') if isinstance(self.config, dict) else None),
+            resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+            resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+            resume_safe_warmup_steps=int(self.config.get('resume_safe_warmup_steps', 5000)) if isinstance(self.config, dict) else 5000,
+            resume_safe_warmup_step_factor=float(self.config.get('resume_safe_warmup_step_factor', 2.0)) if isinstance(self.config, dict) else 2.0,
+            resume_safe_disable_barostat_warmup=bool(self.config.get('resume_safe_disable_barostat_warmup', True)) if isinstance(self.config, dict) else True,
         )
         logger.info('running gas phase')
         grofileparser = app.GromacsGroFile(gas_gro_file)
@@ -747,6 +900,7 @@ class HVapProtocol(Protocol):
             nonbonded_params,
             unit_cell=None,
         )
+        gas_timestep_fs = float(self.config.get('nvt_timestep_fs', 0.2)) if isinstance(self.config, dict) else 0.2
         nvt_run(top=gas_top,
                 system=gas_system,
                 positions=input_positions,
@@ -756,7 +910,11 @@ class HVapProtocol(Protocol):
                 work_dir=self.output_dir,
                 resume=resume,
                 checkpoint_interval=checkpoint_interval,
-                timestep=0.2)
+                timestep=gas_timestep_fs,
+                state_csv_override=(self.config.get('nvt_state_csv') if isinstance(self.config, dict) else None),
+                dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
+                resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
+                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True)
 
     def post_process(self,):
         assert len(self.components) == 1

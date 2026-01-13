@@ -110,11 +110,13 @@ def nonequ_run(
     nonequ_steps: int,
     resume: bool = False,
     checkpoint_interval: int = 5000,
+    timestep_fs: int = 1,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
     from velocityverletplugin import VVIntegrator
-    timestep = 1  # fs, MTS is not supported in VVIntegrator
+    # VVIntegrator supports variable step size; default 1 fs
+    timestep = int(timestep_fs)
     integrator = VVIntegrator(
         temperature=temperature * ou.kelvin,
         frequency=1.0 / ou.picoseconds,

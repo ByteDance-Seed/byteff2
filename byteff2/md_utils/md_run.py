@@ -44,6 +44,13 @@ def openmm_run(
     temperature: float = 300.,
     resume: bool = False,
     checkpoint_path: Optional[str] = None,
+    dcd_path_override: Optional[str] = None,
+    state_csv_override: Optional[str] = None,
+    resume_safe_backoff_frames: int = 2,
+    resume_safe_minimize: bool = True,
+    resume_safe_warmup_steps: int = 5000,
+    resume_safe_warmup_step_factor: float = 2.0,
+    resume_safe_disable_barostat_warmup: bool = True,
 ):
 
     with temporary_cd(work_dir):
@@ -116,8 +123,114 @@ def openmm_run(
                 sim.reporters.append(reporter)
 
         # Run dynamics
+        to_run = int(steps) - int(sim.currentStep)
+        if to_run < 0:
+            logger.info(f'{task_name}: target steps (%d) already reached (current=%d); skipping run', steps, sim.currentStep)
+            to_run = 0
         logger.info(f'Running {task_name}')
-        sim.step(steps - sim.currentStep)
+        if to_run:
+            try:
+                sim.step(to_run)
+            except Exception as e:
+                msg = str(e)
+                is_nan = ('NaN' in msg or 'nan' in msg)
+                if not (resume and is_nan):
+                    raise
+                logger.warning('%s encountered NaN while resuming; attempting safe fallback to last stable trajectory frame', task_name)
+                # Determine artifacts
+                dcd_path = dcd_path_override or f'{task_name}.dcd'
+                csv_path = state_csv_override or f'{task_name}_state.csv'
+                if not os.path.isabs(dcd_path):
+                    dcd_path = os.path.join(os.getcwd(), dcd_path)
+                if not os.path.isabs(csv_path):
+                    csv_path = os.path.join(os.getcwd(), csv_path)
+                # Load positions
+                try:
+                    frames = dcd_read(dcd_path)
+                except Exception:
+                    frames = np.array([])
+                if frames is None or len(frames) == 0:
+                    logger.error('Safe-resume failed: could not read frames from %s', dcd_path)
+                    raise
+                idx = max(0, len(frames) - 1 - int(resume_safe_backoff_frames or 0))
+                last = frames[idx]
+                last_positions = [omm.Vec3(x, y, z) * ou.nanometers for x, y, z in last]
+                # Try to set box from CSV
+                try:
+                    df = pd.read_csv(csv_path)
+                    if 'Box Volume (nm^3)' in df.columns and len(df) > 0:
+                        # choose corresponding or last row
+                        ridx = min(idx, len(df) - 1)
+                        L = float(df['Box Volume (nm^3)'].iloc[ridx]) ** (1.0 / 3.0)
+                        sim.context.setPeriodicBoxVectors(
+                            omm.Vec3(L, 0.0, 0.0) * ou.nanometers,
+                            omm.Vec3(0.0, L, 0.0) * ou.nanometers,
+                            omm.Vec3(0.0, 0.0, L) * ou.nanometers,
+                        )
+                except Exception:
+                    pass
+                # Apply positions, reset velocities
+                sim.context.setPositions(last_positions)
+                sim.context.setVelocitiesToTemperature(temperature)
+                if resume_safe_minimize:
+                    try:
+                        sim.minimizeEnergy(maxIterations=200)
+                    except Exception:
+                        pass
+                # Optional warmup: disable barostat and reduce step size temporarily
+                try:
+                    # capture original settings
+                    orig_step = None
+                    try:
+                        orig_step = integrator.getStepSize()
+                    except Exception:
+                        pass
+                    barostat = None
+                    orig_freq = None
+                    for i in range(system.getNumForces()):
+                        f = system.getForce(i)
+                        if isinstance(f, omm.MonteCarloBarostat):
+                            barostat = f
+                            try:
+                                orig_freq = f.getFrequency()
+                            except Exception:
+                                orig_freq = None
+                            break
+                    if resume_safe_disable_barostat_warmup and barostat is not None:
+                        try:
+                            barostat.setFrequency(0)
+                            sim.context.reinitialize(preserveState=True)
+                        except Exception:
+                            pass
+                    if resume_safe_warmup_steps and resume_safe_warmup_steps > 0 and orig_step is not None:
+                        try:
+                            warm_step = float(orig_step.value_in_unit(ou.femtoseconds)) / float(max(resume_safe_warmup_step_factor, 1.0))
+                            integrator.setStepSize(warm_step * ou.femtoseconds)
+                        except Exception:
+                            pass
+                        try:
+                            sim.step(int(resume_safe_warmup_steps))
+                        except Exception:
+                            # if warmup fails, proceed to attempting main run with original settings
+                            pass
+                    # restore settings
+                    if orig_step is not None:
+                        try:
+                            integrator.setStepSize(orig_step)
+                        except Exception:
+                            pass
+                    if resume_safe_disable_barostat_warmup and barostat is not None and orig_freq is not None:
+                        try:
+                            barostat.setFrequency(orig_freq)
+                            sim.context.reinitialize(preserveState=True)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # continue
+                to_run2 = int(steps) - int(sim.currentStep)
+                if to_run2 > 0:
+                    sim.step(to_run2)
         logger.info(f'{task_name} done')
         # Get the state informations
         state = sim.context.getState(getPositions=True, enforcePeriodicBox=True)  # pylint: disable=unexpected-keyword-arg
@@ -135,10 +248,14 @@ def npt_run(
     work_dir: str = '.',
     resume: bool = False,
     checkpoint_interval: int = 5000,
+    timestep: int = 2,  # fs
+    state_csv_override: Optional[str] = None,
+    dcd_path_override: Optional[str] = None,
+    resume_safe_backoff_frames: int = 2,
+    resume_safe_minimize: bool = True,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
-    timestep = 2  # fs
     pressure = 1.0 * ou.atmospheres  # Target pressure
     frequency = 12  # Attempt volume change every 25 steps
     # default 4 ns
@@ -167,7 +284,7 @@ def npt_run(
         totalSteps=None,
         append=append_logs,
     )
-    dcd_path = 'npt.dcd'
+    dcd_path = dcd_path_override or 'npt.dcd'
     try:
         dcd_reporter = app.DCDReporter(
             dcd_path,
@@ -197,6 +314,10 @@ def npt_run(
         temperature=temperature,
         resume=resume,
         checkpoint_path='npt.chk',
+        dcd_path_override=dcd_path,
+        state_csv_override=state_csv_override,
+        resume_safe_backoff_frames=resume_safe_backoff_frames,
+        resume_safe_minimize=resume_safe_minimize,
     )
 
 
@@ -204,6 +325,7 @@ def rescale_box(
     positions: list[omm.Vec3],
     box_vec,
     work_dir: str = None,
+    csv_override: str = None,
 ):
     """
     Rescale positions and box vectors using the average NPT box length.
@@ -214,44 +336,64 @@ def rescale_box(
     - a tuple/list of three floats (Lx, Ly, Lz) in nm
     """
     # use average density
-    csv_file = os.path.join(work_dir, 'npt_state.csv')
+    csv_file = csv_override if csv_override else os.path.join(work_dir, 'npt_state.csv')
     box = pd.read_csv(csv_file)["Box Volume (nm^3)"]
     ave_length = np.mean(box[-500:]) ** (1 / 3)  # last 1 ns
 
-    # Normalize input box specification
-    three_vec = None
-    # case 1: iterable of three Vec3
-    if isinstance(box_vec, (list, tuple)) and len(box_vec) == 3 and hasattr(box_vec[0], 'x'):
-        three_vec = True
-        Lx = float(box_vec[0].x)
-        Ly = float(box_vec[1].x if hasattr(box_vec[1], 'x') else box_vec[1][0])
-        Lz = float(box_vec[2].x if hasattr(box_vec[2], 'x') else box_vec[2][0])
-    # case 2: single Vec3 of lengths
-    elif hasattr(box_vec, 'x') and hasattr(box_vec, 'y') and hasattr(box_vec, 'z'):
-        three_vec = False
-        Lx, Ly, Lz = float(box_vec.x), float(box_vec.y), float(box_vec.z)
-    # case 3: iterable of three floats
-    elif isinstance(box_vec, (list, tuple)) and len(box_vec) == 3:
-        three_vec = False
-        Lx, Ly, Lz = float(box_vec[0]), float(box_vec[1]), float(box_vec[2])
-    else:
-        raise TypeError('Unsupported box_vec format for rescale_box')
+    # Normalize input box specification robustly
+    def _to_numeric_triplet(bv):
+        # None -> unknown; caller will handle
+        if bv is None:
+            return None
+        # Quantity wrapping Vec3
+        try:
+            if hasattr(bv, 'value_in_unit'):
+                tmp = bv.value_in_unit(ou.nanometer)
+                # value_in_unit may return a Vec3
+                if hasattr(tmp, 'x') and hasattr(tmp, 'y') and hasattr(tmp, 'z'):
+                    return (float(tmp.x), float(tmp.y), float(tmp.z))
+                # or a scalar/sequence
+                bv = tmp
+        except Exception:
+            pass
+        # Vec3
+        if hasattr(bv, 'x') and hasattr(bv, 'y') and hasattr(bv, 'z'):
+            return (float(bv.x), float(bv.y), float(bv.z))
+        # tuple/list of three Vec3 -> use vector norms (handles triclinic)
+        if isinstance(bv, (list, tuple)) and len(bv) == 3 and all(hasattr(x, 'x') for x in bv):
+            import math
+            def vlen(v):
+                return math.sqrt(float(v.x)**2 + float(v.y)**2 + float(v.z)**2)
+            return (vlen(bv[0]), vlen(bv[1]), vlen(bv[2]))
+        # tuple/list of three numbers/quantities
+        if isinstance(bv, (list, tuple)) and len(bv) == 3:
+            vals = []
+            for x in bv:
+                if hasattr(x, 'value_in_unit'):
+                    try:
+                        x = x.value_in_unit(ou.nanometer)
+                    except Exception:
+                        x = float(x)
+                vals.append(float(x))
+            return (vals[0], vals[1], vals[2])
+        return None
 
-    scale = ave_length / Lx
+    triplet = _to_numeric_triplet(box_vec)
+    if triplet is None:
+        # Fall back: if we can't determine current box, assume current box length equals target average length
+        Lx = Ly = Lz = float(ave_length)
+        scale = 1.0
+    else:
+        Lx, Ly, Lz = triplet
+        scale = ave_length / Lx if Lx else 1.0
+
     positions *= scale
 
-    if three_vec:
-        new_box_vec = [
-            omm.Vec3(Lx * scale, 0.0, 0.0) * ou.nanometers,
-            omm.Vec3(0.0, Ly * scale, 0.0) * ou.nanometers,
-            omm.Vec3(0.0, 0.0, Lz * scale) * ou.nanometers,
-        ]
-    else:
-        new_box_vec = [
-            omm.Vec3(Lx * scale, 0.0, 0.0) * ou.nanometers,
-            omm.Vec3(0.0, Ly * scale, 0.0) * ou.nanometers,
-            omm.Vec3(0.0, 0.0, Lz * scale) * ou.nanometers,
-        ]
+    new_box_vec = [
+        omm.Vec3(Lx * scale, 0.0, 0.0) * ou.nanometers,
+        omm.Vec3(0.0, Ly * scale, 0.0) * ou.nanometers,
+        omm.Vec3(0.0, 0.0, Lz * scale) * ou.nanometers,
+    ]
 
     logger.info('scale box by %.3f', scale)
     return positions, new_box_vec
@@ -268,6 +410,10 @@ def nvt_run(
         timestep: int = 2,  # fs
         resume: bool = False,
         checkpoint_interval: int = 5000,
+        state_csv_override: Optional[str] = None,
+        dcd_path_override: Optional[str] = None,
+        resume_safe_backoff_frames: int = 2,
+        resume_safe_minimize: bool = True,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
@@ -295,7 +441,7 @@ def nvt_run(
         totalSteps=None,
         append=append_logs,
     )
-    dcd_path = 'nvt.dcd'
+    dcd_path = dcd_path_override or 'nvt.dcd'
     try:
         dcd_reporter = app.DCDReporter(
             dcd_path,
@@ -326,6 +472,10 @@ def nvt_run(
         temperature=temperature,
         resume=resume,
         checkpoint_path='nvt.chk',
+        dcd_path_override=dcd_path,
+        state_csv_override=state_csv_override,
+        resume_safe_backoff_frames=resume_safe_backoff_frames,
+        resume_safe_minimize=resume_safe_minimize,
     )
 
 
