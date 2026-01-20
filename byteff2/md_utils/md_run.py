@@ -27,8 +27,171 @@ from openmm.app.gromacstopfile import GromacsTopFile
 
 from bytemol.utils import temporary_cd
 
+import struct
+import shutil
+import tempfile
+
 logger = logging.getLogger(__name__)
 
+## added by me on 01-19-2026
+def validate_checkpoint(checkpoint_path: str) -> bool:
+    """Validate that a checkpoint file is complete and readable."""
+    if not os.path.exists(checkpoint_path):
+        return False
+    try:
+        # Check file size is reasonable (not truncated)
+        file_size = os.path.getsize(checkpoint_path)
+        if file_size < 1000:  # Minimum reasonable size
+            return False
+        
+        # Try to read the checkpoint header
+        with open(checkpoint_path, 'rb') as f:
+            # OpenMM checkpoints start with a version number
+            header = f.read(4)
+            if len(header) < 4:
+                return False
+        return True
+    except Exception:
+        return False
+
+def validate_positions(positions) -> bool:
+    """Check if any positions contain NaN or Inf values."""
+    import numpy as np
+    pos_array = np.array([[p.x, p.y, p.z] for p in positions])
+    return not (np.any(np.isnan(pos_array)) or np.any(np.isinf(pos_array)))
+
+class SafeCheckpointReporter(app.CheckpointReporter):
+    """Checkpoint reporter that writes atomically to prevent corruption."""
+    
+    def __init__(self, file, reportInterval):
+        super().__init__(file, reportInterval)
+        self._final_path = file
+    
+    def report(self, simulation, state):
+        # Write to temporary file first
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(self._final_path) or '.',
+            suffix='.chk.tmp'
+        )
+        os.close(temp_fd)
+        try:
+            simulation.saveCheckpoint(temp_path)
+            # Atomic rename (on POSIX systems)
+            shutil.move(temp_path, self._final_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
+
+def recover_from_trajectory(
+    dcd_path: str,
+    csv_path: str,
+    backoff_frames: int = 2,
+    max_backoff: int = 50,
+) -> tuple:
+    """
+    Recover valid positions from trajectory with progressive backoff.
+    
+    Returns (positions, box_length, frame_index) or raises if unrecoverable.
+    """
+    import numpy as np
+    from MDAnalysis.coordinates.DCD import DCDFile
+    import pandas as pd
+    
+    if not os.path.exists(dcd_path):
+        raise FileNotFoundError(f"DCD file not found: {dcd_path}")
+    
+    # Read all frames
+    positions_list = []
+    with DCDFile(dcd_path) as dcd:
+        for frame in dcd:
+            positions_list.append(frame.xyz.copy())
+    
+    if len(positions_list) == 0:
+        raise ValueError("DCD file contains no frames")
+    
+    # Read box volumes
+    df = pd.read_csv(csv_path)
+    box_volumes = df["Box Volume (nm^3)"].values
+    
+    # Try progressively earlier frames until we find valid positions
+    for backoff in range(backoff_frames, min(max_backoff, len(positions_list))):
+        frame_idx = len(positions_list) - 1 - backoff
+        if frame_idx < 0:
+            continue
+            
+        pos = positions_list[frame_idx]
+        
+        # Validate positions
+        if np.any(np.isnan(pos)) or np.any(np.isinf(pos)):
+            logger.warning(f"Frame {frame_idx} contains NaN/Inf, trying earlier frame")
+            continue
+        
+        # Check for unreasonable positions (atoms too far apart or overlapping)
+        if np.any(np.abs(pos) > 1000):  # nm, unreasonably large
+            logger.warning(f"Frame {frame_idx} has unreasonable positions, trying earlier")
+            continue
+        
+        # Get corresponding box size
+        csv_idx = min(frame_idx, len(box_volumes) - 1)
+        box_length = box_volumes[csv_idx] ** (1/3)
+        
+        logger.info(f"Recovered valid positions from frame {frame_idx}")
+        return pos, box_length, frame_idx
+    
+    raise ValueError(f"Could not find valid positions in last {max_backoff} frames")
+
+def stabilize_polarizable_system(
+    simulation: app.Simulation,
+    system: omm.System,
+    temperature: float,
+    max_iterations: int = 5,
+):
+    """
+    Stabilize a polarizable system after position recovery.
+    """
+    # Find and temporarily modify polarization settings
+    amoeba_force = None
+    for i in range(system.getNumForces()):
+        force = system.getForce(i)
+        if isinstance(force, omm.AmoebaMultipoleForce):
+            amoeba_force = force
+            break
+    
+    if amoeba_force is not None:
+        # Store original mutual induced settings
+        original_max_iter = amoeba_force.getMutualInducedMaxIterations()
+        original_target_epsilon = amoeba_force.getMutualInducedTargetEpsilon()
+        
+        try:
+            # Use tighter convergence during stabilization
+            amoeba_force.setMutualInducedMaxIterations(500)
+            amoeba_force.setMutualInducedTargetEpsilon(1e-7)
+            simulation.context.reinitialize(preserveState=True)
+            
+            # Gentle minimization with position restraints conceptually
+            for i in range(max_iterations):
+                try:
+                    simulation.minimizeEnergy(maxIterations=100, tolerance=10.0)
+                    # Check if stable
+                    state = simulation.context.getState(getEnergy=True)
+                    pe = state.getPotentialEnergy().value_in_unit(ou.kilojoules_per_mole)
+                    if not (np.isnan(pe) or np.isinf(pe)):
+                        logger.info(f"Stabilization iteration {i}: PE = {pe:.2f} kJ/mol")
+                        break
+                except Exception as e:
+                    logger.warning(f"Stabilization iteration {i} failed: {e}")
+                    # Reassign velocities and try again
+                    simulation.context.setVelocitiesToTemperature(temperature * 0.5)
+        finally:
+            # Restore original settings
+            amoeba_force.setMutualInducedMaxIterations(original_max_iter)
+            amoeba_force.setMutualInducedTargetEpsilon(original_target_epsilon)
+            simulation.context.reinitialize(preserveState=True)
+    
+    # Final velocity assignment at target temperature
+    simulation.context.setVelocitiesToTemperature(temperature)
+###
 
 def openmm_run(
     task_name: str,
@@ -51,6 +214,8 @@ def openmm_run(
     resume_safe_warmup_steps: int = 5000,
     resume_safe_warmup_step_factor: float = 2.0,
     resume_safe_disable_barostat_warmup: bool = True,
+    resume_max_backoff_frames: int = 50,  # NEW: maximum frames to search back (01-19-2026)
+    resume_validate_checkpoint: bool = True,  # NEW: validate before loading (01-19-2026)
 ):
 
     with temporary_cd(work_dir):
@@ -100,11 +265,60 @@ def openmm_run(
         sim.context.setPositions(positions)
         if box_vec is not None:
             sim.context.setPeriodicBoxVectors(*box_vec)
-        # Resume from checkpoint if requested and available
-        if resume and checkpoint_path and os.path.isfile(checkpoint_path):
-            logger.info('Resuming %s from checkpoint %s', task_name, checkpoint_path)
-            sim.loadCheckpoint(checkpoint_path)
-            minimize = False  # do not minimize when resuming
+        
+        if resume and checkpoint_path and os.path.exists(checkpoint_path):
+            # NEW: Validate checkpoint before attempting to load: 01-19-2026
+            checkpoint_valid = (
+                validate_checkpoint(checkpoint_path) 
+                if resume_validate_checkpoint else True
+            )
+            
+            if checkpoint_valid:
+                try:
+                    sim.loadCheckpoint(checkpoint_path)
+                    # Validate loaded positions
+                    state = sim.context.getState(getPositions=True)
+                    if not validate_positions(state.getPositions()):
+                        raise ValueError("Loaded checkpoint contains NaN positions")
+                    logger.info("Successfully resumed from checkpoint")
+                except Exception as e:
+                    logger.warning(f"Checkpoint load failed: {e}, attempting trajectory recovery")
+                    checkpoint_valid = False
+            
+            if not checkpoint_valid:
+                # Enhanced trajectory recovery
+                dcd_path = dcd_path_override or f'{task_name}.dcd'
+                csv_path = state_csv_override or f'{task_name}_state.csv'
+                
+                try:
+                    recovered_pos, box_length, frame_idx = recover_from_trajectory(
+                        dcd_path, csv_path,
+                        backoff_frames=resume_safe_backoff_frames,
+                        max_backoff=resume_max_backoff_frames,
+                    )
+                    
+                    # Apply recovered state
+                    sim.context.setPositions(recovered_pos * ou.angstroms)
+                    sim.context.setPeriodicBoxVectors(
+                        omm.Vec3(box_length, 0, 0) * ou.nanometers,
+                        omm.Vec3(0, box_length, 0) * ou.nanometers,
+                        omm.Vec3(0, 0, box_length) * ou.nanometers,
+                    )
+                    
+                    # Stabilize polarizable system
+                    stabilize_polarizable_system(sim, system, temperature)
+                    
+                    logger.info(f"Recovered from trajectory frame {frame_idx}")
+                except Exception as recovery_error:
+                    logger.error(f"Recovery failed: {recovery_error}")
+                    raise
+        ###
+
+        # # Resume from checkpoint if requested and available
+        # if resume and checkpoint_path and os.path.isfile(checkpoint_path):
+        #     logger.info('Resuming %s from checkpoint %s', task_name, checkpoint_path)
+        #     sim.loadCheckpoint(checkpoint_path)
+        #     minimize = False  # do not minimize when resuming
 
         if minimize:
             # Minimize the energy
@@ -114,8 +328,10 @@ def openmm_run(
                 tolerance=10 * ou.kilojoules_per_mole / ou.nanometer,
             )
         # initialize temperature only when not resuming from a checkpoint
-        if not (resume and checkpoint_path and os.path.isfile(checkpoint_path)):
+        # if not (resume and checkpoint_path and os.path.isfile(checkpoint_path)):
+        if not (resume and checkpoint_path and os.path.exists(checkpoint_path)):
             sim.context.setVelocitiesToTemperature(temperature)
+        
         if reporter is not None:
             if isinstance(reporter, list):
                 sim.reporters = reporter
