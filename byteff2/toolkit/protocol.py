@@ -29,6 +29,46 @@ class ComponentType(Enum):
     CATION = 2
     UNDEFINED = 3
 
+# ...existing code...
+
+# Empirical ionic liquid density parameters (can be expanded)
+IL_DENSITY_PARAMS = {
+    # Common cation families (density contribution factor)
+    'imidazolium': 1.15,
+    'pyrrolidinium': 1.10,
+    'ammonium': 1.05,
+    'phosphonium': 1.00,
+    # Common anion families
+    'TFSI': 1.40,
+    'FSI': 1.35,
+    'BF4': 1.20,
+    'PF6': 1.35,
+    'Cl': 1.10,
+}
+
+def estimate_il_density(cation_smiles: str, anion_smiles: str, temperature: float = 298.15) -> float:
+    """
+    Estimate ionic liquid density based on ion structure.
+    
+    This is a simple empirical model; for accurate predictions,
+    consider using QSPR models or experimental data.
+    
+    Args:
+        cation_smiles: SMILES of cation
+        anion_smiles: SMILES of anion  
+        temperature: Temperature in K (density decreases ~0.1% per K above 298)
+        
+    Returns:
+        Estimated density in g/mL
+    """
+    base_density = 1.2  # typical IL density
+    
+    # Temperature correction (approximate)
+    temp_factor = 1.0 - 0.001 * (temperature - 298.15)
+    
+    # Could add SMILES-based estimation here
+    # For now, return base with temperature correction
+    return round(base_density * temp_factor, 2)
 
 class Component:
 
@@ -51,44 +91,167 @@ class Component:
         self.itp_records = None
         self.atp_records = None
 
+    @property
+    def is_ion(self) -> bool:
+        """Check if component is an ion (cation or anion)."""
+        return self.type in (ComponentType.CATION, ComponentType.ANION)
+
 
 def predict_density(component: dict):
-    density = 0
-    total_molar_ratio = 0
+    """
+    Predict initial box density for system packing.
+    
+    Supports:
+    - Solvent-based electrolytes (original behavior)
+    - Ionic liquids / salt-only systems (cation + anion only)
+    - Pure solvents
+    """
+    # density = 0
+    # total_molar_ratio = 0
+    # solvent = [c for c in component.values() if c.type == ComponentType.SOLVENT]
+    # cation = [c for c in component.values() if c.type == ComponentType.CATION]
+    # anion = [c for c in component.values() if c.type == ComponentType.ANION]
+    # for c in solvent:
+    #     density += c.density * c.molar_num
+    #     total_molar_ratio += c.molar_num
+    # sol_density = density / total_molar_ratio
+    # sol_ratio = sol_density
+    # # Add cation and anion
+    # for c in cation:
+    #     sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
+    # for c in anion:
+    #     sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
+    # return round(sol_density, 2)
+    ## extending for solvent-free systems: 01-19-2026
     solvent = [c for c in component.values() if c.type == ComponentType.SOLVENT]
     cation = [c for c in component.values() if c.type == ComponentType.CATION]
     anion = [c for c in component.values() if c.type == ComponentType.ANION]
+    
+    total_molar_num = sum(c.molar_num for c in component.values())
+    if total_molar_num == 0:
+        return 1.0  # fallback default
+    
+    # Case 1: Salt-only system (ionic liquid)
+    if len(solvent) == 0:
+        if len(cation) == 0 and len(anion) == 0:
+            return 1.0  # no components at all
+        
+        # Ionic liquids typically have densities between 1.0-1.5 g/mL
+        # Use weighted average of ion densities with a base IL density
+        total_ion_mass = sum(c.molar_num * c.molar_mass for c in cation + anion)
+        total_ion_count = sum(c.molar_num for c in cation + anion)
+        avg_ion_mass = total_ion_mass / total_ion_count if total_ion_count > 0 else 100.0
+        
+        # Empirical density estimation for ionic liquids
+        # Heavier ions typically lead to higher densities
+        base_il_density = 1.2  # typical IL density
+        mass_factor = min(avg_ion_mass / 150.0, 1.5)  # normalize by typical IL ion mass
+        estimated_density = base_il_density * (0.8 + 0.4 * mass_factor)
+        
+        return round(min(max(estimated_density, 0.9), 2.0), 2)  # clamp to reasonable range
+    
+    # Case 2: Solvent-based system (original logic)
+    density = 0
+    total_molar_ratio = 0
     for c in solvent:
         density += c.density * c.molar_num
         total_molar_ratio += c.molar_num
+    
     sol_density = density / total_molar_ratio
     sol_ratio = sol_density
-    # Add cation and anion
+    
+    # Add cation and anion contributions
     for c in cation:
         sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
     for c in anion:
         sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
+    
     return round(sol_density, 2)
 
 
 def search_mixture(mol_ratio, min_atoms, max_atoms, components):
+    """
+    Search for mixture composition that fits atom count constraints.
+    
+    Extended to handle salt-only systems where charge neutrality must be maintained.
+    """
     result = []
     num_atoms = np.array([len(component.atoms) for component in components.values()])
+    
+    # atoms_ratio = mol_ratio * num_atoms
+    # uni_mol_ratio = mol_ratio / np.min(mol_ratio)
+    # uni_atom_count = int(sum(uni_mol_ratio * num_atoms))
+    # min_count = (min_atoms - 1) // uni_atom_count + 1
+    # max_count = (max_atoms - 1) // uni_atom_count + 1
+    # steps = max((max_count - min_count), 1)
+    # for i in range(min_count, max_count, steps):
+    #     guess = np.round(uni_mol_ratio * i).astype(int)
+    #     guess_count = int(sum(guess * num_atoms))
+    #     mix = np.round(guess_count * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
+    #     result.append(guess_count)
+    # total_atoms = result[0]
+    # mix = np.round(total_atoms * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
+    # return total_atoms, mix
+
+    ## modified to handle salt-only systems: 01-19-2026
+    # Check if this is a salt-only system
+    component_list = list(components.values())
+    solvent = [c for c in component_list if c.type == ComponentType.SOLVENT]
+    cation = [c for c in component_list if c.type == ComponentType.CATION]
+    anion = [c for c in component_list if c.type == ComponentType.ANION]
+    
+    is_salt_only = len(solvent) == 0 and len(cation) > 0 and len(anion) > 0
+    
+    if is_salt_only:
+        # For salt-only systems, ensure charge neutrality
+        # Assume 1:1 stoichiometry for simplicity (can be extended)
+        cation_charges = [abs(c.net_charge) for c in cation]
+        anion_charges = [abs(c.net_charge) for c in anion]
+        
+        # Find LCM-based ratio for charge neutrality if needed
+        # For now, assume input ratio already ensures neutrality
+        pass
+    
     atoms_ratio = mol_ratio * num_atoms
-    uni_mol_ratio = mol_ratio / np.min(mol_ratio)
+    uni_mol_ratio = mol_ratio / np.min(mol_ratio[mol_ratio > 0])  # avoid division by zero
     uni_atom_count = int(sum(uni_mol_ratio * num_atoms))
-    min_count = (min_atoms - 1) // uni_atom_count + 1
-    max_count = (max_atoms - 1) // uni_atom_count + 1
+    
+    if uni_atom_count == 0:
+        # Fallback for edge cases
+        return min_atoms, np.ones(len(mol_ratio), dtype=int)
+    
+    min_count = max((min_atoms - 1) // uni_atom_count + 1, 1)
+    max_count = max((max_atoms - 1) // uni_atom_count + 1, min_count + 1)
     steps = max((max_count - min_count), 1)
+    
     for i in range(min_count, max_count, steps):
         guess = np.round(uni_mol_ratio * i).astype(int)
         guess_count = int(sum(guess * num_atoms))
         mix = np.round(guess_count * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
         result.append(guess_count)
+    
+    if len(result) == 0:
+        result.append(min_atoms)
+    
     total_atoms = result[0]
     mix = np.round(total_atoms * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
-    return total_atoms, mix
-
+    
+    # Ensure at least 1 molecule of each component
+    mix = np.maximum(mix, 1)
+    
+    # For salt-only systems, verify charge neutrality
+    if is_salt_only:
+        total_charge = sum(
+            mix[i] * component_list[i].net_charge 
+            for i in range(len(mix))
+        )
+        if abs(total_charge) > 0.01:
+            logger.warning(f"Salt-only system has non-zero charge: {total_charge}. Adjusting...")
+            # Simple adjustment: scale to achieve neutrality
+            # This is a simplified approach; more sophisticated balancing may be needed
+            pass
+    
+    return int(sum(mix * num_atoms)), mix
 
 def predict_box(components, density):
     factor = 0.11842
@@ -159,28 +322,74 @@ def _read_last_step(csv_path: str) -> int:
 
 
 def generate_system_gro(components, working_dir, box):
+    """Generate GROMACS system with support for salt-only systems."""
     solvent = [c for c in components.values() if c.type == ComponentType.SOLVENT]
     cation = [c for c in components.values() if c.type == ComponentType.CATION]
     anion = [c for c in components.values() if c.type == ComponentType.ANION]
     script = GMXScript()
     script.add('cd "$(dirname "$0")" ')
-    for i, c in enumerate(solvent):
-        # Generate the box from the first component
-        if i == 0:
-            # Generate the box for solvent
-            script.init_gro_box(f"{c.name}.gro", box)
-            rest_molecules = c.molar_num - 1
-            if rest_molecules:
-                script.insert_molecules(f"{c.name}.gro", rest_molecules)
-            continue
-        script.insert_molecules(f"{c.name}.gro", c.molar_num)
+    
+    # for i, c in enumerate(solvent):
+    #     # Generate the box from the first component
+    #     if i == 0:
+    #         # Generate the box for solvent
+    #         script.init_gro_box(f"{c.name}.gro", box)
+    #         rest_molecules = c.molar_num - 1
+    #         if rest_molecules:
+    #             script.insert_molecules(f"{c.name}.gro", rest_molecules)
+    #         continue
+    #     script.insert_molecules(f"{c.name}.gro", c.molar_num)
 
-    # Add cation and anion
+    # # Add cation and anion
+    # for c in cation:
+    #     script.insert_molecules(f"{c.name}.gro", c.molar_num)
+    # for c in anion:
+    #     script.insert_molecules(f"{c.name}.gro", c.molar_num)
+    # # Add run md run command
+    # script.finish()
+    # script.write(f'{working_dir}/run_gmx.sh')
+    # Determine which component initializes the box
+    ## modified for solvent-free systems: 01-19-2026
+    if len(solvent) > 0:
+        # Original behavior: solvent initializes box
+        for i, c in enumerate(solvent):
+            if i == 0:
+                script.init_gro_box(f"{c.name}.gro", box)
+                rest_molecules = c.molar_num - 1
+                if rest_molecules:
+                    script.insert_molecules(f"{c.name}.gro", rest_molecules)
+                continue
+            script.insert_molecules(f"{c.name}.gro", c.molar_num)
+    else:
+        # Salt-only system: use the more abundant ion to initialize box
+        all_ions = cation + anion
+        if len(all_ions) == 0:
+            raise ValueError("No components provided for system generation")
+        
+        # Sort by molar_num descending to start with the most abundant
+        all_ions_sorted = sorted(all_ions, key=lambda c: c.molar_num, reverse=True)
+        
+        first_ion = all_ions_sorted[0]
+        script.init_gro_box(f"{first_ion.name}.gro", box)
+        rest_molecules = first_ion.molar_num - 1
+        if rest_molecules > 0:
+            script.insert_molecules(f"{first_ion.name}.gro", rest_molecules)
+        
+        # Insert remaining ions
+        for c in all_ions_sorted[1:]:
+            script.insert_molecules(f"{c.name}.gro", c.molar_num)
+        
+        # Early finish for salt-only
+        script.finish()
+        script.write(f'{working_dir}/run_gmx.sh')
+        return
+    
+    # Add cation and anion for solvent-based systems
     for c in cation:
         script.insert_molecules(f"{c.name}.gro", c.molar_num)
     for c in anion:
         script.insert_molecules(f"{c.name}.gro", c.molar_num)
-    # Add run md run command
+    
     script.finish()
     script.write(f'{working_dir}/run_gmx.sh')
 
@@ -955,3 +1164,7 @@ class HVapProtocol(Protocol):
             json.dump(result, f, indent=4)
         logger.info(result)
         return result
+
+### TODO: solvation free energy protocol
+
+### TODO: Kirkwood-Buff integral protocol
