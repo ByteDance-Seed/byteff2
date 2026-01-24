@@ -1,0 +1,25 @@
+[project]
+name = "byteff2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ase",
+    "GitPython",
+    "h5py",
+    "isort",
+    "MDAnalysis",
+    "numpy==1.26.4",
+    "pandas",
+    "pylint",
+    "pytest-xdist",
+    "pytest",
+    "PyYAML",
+    "raganything",
+    "rdkit",
+    "Sella",
+    "torch",
+    "torch-geometric",
+    "tqdm",
+]

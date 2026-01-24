@@ -248,3 +248,4 @@ submodules/openmm
 **/.DS_Store
 */*/.DS_Store
 example/test-*
+PEMD
