@@ -105,11 +105,16 @@ def main():
             params_dir=config['params_dir']
         )
     
-    protocol.config = config
+    # protocol.config = config
+    # IMPORTANT: Call setup_from_config to parse polymer components: 01-30-2026
+    protocol.setup_from_config(config)
     
     print(f"\nStarting {protocol_name} simulation...")
     print(f"Temperature: {config['temperature']} K")
     print(f"Components: {list(config['components'].keys())}")
+    
+    # Debug: print polymer components
+    print(f"Polymer components parsed: {list(protocol.polymer_components.keys())}")
     
     try:
         protocol.run_full_workflow()

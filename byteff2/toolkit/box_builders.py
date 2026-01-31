@@ -15,12 +15,43 @@ import subprocess
 import tempfile
 import logging
 import random
+import shutil
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+def _get_gmx_command() -> str:
+    """
+    Detect the available GROMACS command.
+    
+    Checks for gmx_mpi first (common on HPCs), then falls back to gmx.
+    Also respects the GMX environment variable if set.
+    
+    Returns:
+        The GROMACS command to use
+        
+    Raises:
+        RuntimeError: If no GROMACS installation is found
+    """
+    # Check environment variable first
+    gmx_env = os.environ.get('GMX')
+    if gmx_env and shutil.which(gmx_env):
+        return gmx_env
+    
+    # Try gmx_mpi first (common on HPCs)
+    if shutil.which('gmx_mpi'):
+        return 'gmx_mpi'
+    
+    # Fall back to gmx
+    if shutil.which('gmx'):
+        return 'gmx'
+    
+    raise RuntimeError(
+        "GROMACS not found. Neither 'gmx_mpi' nor 'gmx' found in PATH. "
+        "Please install GROMACS or set the GMX environment variable."
+    )
 
 @dataclass
 class BoxComponent:
@@ -58,17 +89,21 @@ class BoxBuilder(ABC):
     def _convert_pdb_to_gro(self, pdb_file: str, gro_file: str, box_size: float):
         """Convert PDB to GRO format using GROMACS."""
         try:
+            gmx_cmd = _get_gmx_command()
             cmd = [
-                "gmx", "editconf",
+                gmx_cmd, "editconf",
                 "-f", pdb_file,
                 "-o", gro_file,
                 "-box", str(box_size), str(box_size), str(box_size),
                 "-c"  # Center in box
             ]
-            subprocess.run(cmd, check=True, capture_output=True)
-            logger.info(f"Converted {pdb_file} to {gro_file}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"Converted {pdb_file} to {gro_file} using {gmx_cmd}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to convert PDB to GRO: {e}")
+            logger.error(f"Failed to convert PDB to GRO: {e.stderr}")
+            raise
+        except RuntimeError as e:
+            logger.error(str(e))
             raise
             
     def _check_tool_available(self, tool_name: str) -> bool:

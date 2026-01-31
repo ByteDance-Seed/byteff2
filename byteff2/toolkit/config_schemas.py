@@ -131,11 +131,12 @@ EXAMPLE_PEO_LITFSI: Dict[str, Any] = {
     "protocol": "PolymerTransport",
     "temperature": 363,  # Above PEO melting point (65°C)
     "pressure": 1.0,
+    "components_as_counts": True,
     "components": {
         "PEO": {
             "type": "polymer",
-            "count": 20,
-            "monomer_smiles": "CCO",
+            "count": 30,
+            "monomer_smiles": "[*]OCC[*]",
             "degree_of_polymerization": 50,  # ~2200 g/mol
             "tacticity": "atactic",
             "end_groups": {
@@ -145,11 +146,11 @@ EXAMPLE_PEO_LITFSI: Dict[str, Any] = {
         },
         "LI": {
             "type": "salt_cation",
-            "count": 100,  # EO:Li = 10:1
+            "count": 50,  # EO:Li = 10:1
         },
         "TFSI": {
             "type": "salt_anion",
-            "count": 100,
+            "count": 50,
         }
     },
     "smiles": {
@@ -160,10 +161,10 @@ EXAMPLE_PEO_LITFSI: Dict[str, Any] = {
     "target_density": 1.2,  # g/cm³
     "equilibration_stages": [
         {"name": "minimize", "ensemble": "minimize", "steps": 50000},
-        {"name": "nvt_restrained", "ensemble": "nvt", "steps": 100000, "restraint_fc": 1000},
-        {"name": "nvt_release", "ensemble": "nvt", "steps": 100000, "restraint_fc": 100},
-        {"name": "nvt_free", "ensemble": "nvt", "steps": 200000},
-        {"name": "npt_equilibrate", "ensemble": "npt", "steps": 5000000},
+        # {"name": "nvt_restrained", "ensemble": "nvt", "steps": 100000, "restraint_fc": 1000},
+        # {"name": "nvt_release", "ensemble": "nvt", "steps": 100000, "restraint_fc": 100},
+        # {"name": "nvt_free", "ensemble": "nvt", "steps": 200000},
+        # {"name": "npt_equilibrate", "ensemble": "npt", "steps": 5000000},
     ],
     "npt_steps": 10000000,
     "nvt_steps": 50000000,  # Long production for polymer systems
@@ -174,11 +175,12 @@ EXAMPLE_PEO_LIFSI: Dict[str, Any] = {
     "protocol": "PolymerTransport",
     "temperature": 353,
     "pressure": 1.0,
+    "components_as_counts": True,
     "components": {
         "PEO": {
             "type": "polymer",
             "count": 15,
-            "monomer_smiles": "CCO",
+            "monomer_smiles": "[*]OCC[*]",
             "degree_of_polymerization": 100,
             "tacticity": "atactic",
         },
@@ -204,11 +206,12 @@ EXAMPLE_PPO_LITFSI: Dict[str, Any] = {
     "protocol": "PolymerTransport",
     "temperature": 298,  # PPO is amorphous at room temperature
     "pressure": 1.0,
+    "components_as_counts": True,
     "components": {
         "PPO": {
             "type": "polymer",
             "count": 20,
-            "monomer_smiles": "CC(C)O",  # Propylene oxide
+            "monomer_smiles": "[*]OC(C)C[*]",  # Propylene oxide
             "degree_of_polymerization": 30,
             "tacticity": "atactic",
         },
@@ -233,13 +236,14 @@ EXAMPLE_PPO_LITFSI: Dict[str, Any] = {
 EXAMPLE_BLOCK_COPOLYMER: Dict[str, Any] = {
     "protocol": "PolymerTransport",
     "temperature": 363,
+    "components_as_counts": True,
     "components": {
         "PEO-PS": {
             "type": "polymer",
             "count": 10,
             "blocks": [
-                {"smiles": "CCO", "dp": 50, "name": "PEO"},
-                {"smiles": "CC(c1ccccc1)", "dp": 20, "name": "PS"},
+                {"smiles": "[*]OCC[*]", "dp": 50, "name": "PEO"},
+                {"smiles": "[*]CC(c1ccccc1)[*]", "dp": 20, "name": "PS"},
             ],
             "architecture": "diblock",
         },

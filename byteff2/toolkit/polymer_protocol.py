@@ -45,6 +45,25 @@ class BoxBuilderType(Enum):
     PACKMOL = "packmol"
     AMORPHOUS = "amorphous"
 
+@dataclass
+class SimpleComponent:
+    """Simple component class for polymer protocol internal use."""
+    name: str
+    smiles: str
+    type: ComponentType
+    molar_num: int = 1
+
+@dataclass
+class SimplePolymerComponent:
+    """Simple polymer component class that doesn't require topo_mol."""
+    name: str
+    smiles: str
+    type: ComponentType
+    molar_num: int = 1
+    monomer_smiles: str = ""
+    degree_of_polymerization: int = 1
+    end_groups: Tuple[Optional[str], Optional[str]] = (None, None)
+    tacticity: str = "atactic"
 
 @dataclass
 class PolymerComponent(Component):
@@ -123,7 +142,8 @@ class PolymerElectrolyteProtocol(Protocol):
         resolved_params_dir = params_dir or os.path.join(output_dir, "params")
         super().__init__(resolved_params_dir, output_dir)
         self.config = {}
-        self.polymer_components: Dict[str, PolymerComponent] = {}
+        # self.polymer_components: Dict[str, PolymerComponent] = {}
+        self.polymer_components: Dict[str, SimplePolymerComponent] = {}  # Changed type
         self.box_builder_type = BoxBuilderType.PACKMOL
         self._polymer_builder = None
         
@@ -144,12 +164,38 @@ class PolymerElectrolyteProtocol(Protocol):
         smiles_dict = config.get("smiles", {})
         
         for name, comp_config in components.items():
-            if isinstance(comp_config, dict):
-                smiles = smiles_dict.get(name, comp_config.get("smiles", ""))
-                if comp_config.get("type") == "polymer":
-                    self.polymer_components[name] = PolymerComponent.from_config(
-                        name, comp_config, smiles
+            # if isinstance(comp_config, dict):
+            #     smiles = smiles_dict.get(name, comp_config.get("smiles", ""))
+            #     if comp_config.get("type") == "polymer":
+            #         self.polymer_components[name] = PolymerComponent.from_config(
+            #             name, comp_config, smiles
+            #         )
+            if isinstance(comp_config, dict) and comp_config.get("type") == "polymer":
+                # Extract end groups properly
+                end_groups_config = comp_config.get("end_groups", {})
+                if isinstance(end_groups_config, dict):
+                    end_groups = (
+                        end_groups_config.get("left"),
+                        end_groups_config.get("right")
                     )
+                else:
+                    end_groups = (None, None)
+
+                # Create a simple polymer component holder
+                polymer_comp = SimplePolymerComponent(
+                    name=name,
+                    smiles="",  # Will be generated later
+                    type=ComponentType.SOLVENT,  # Polymers treated as matrix
+                    molar_num=comp_config.get("count", 1),
+                    monomer_smiles=comp_config.get("monomer_smiles", ""),
+                    degree_of_polymerization=comp_config.get("dp", comp_config.get("degree_of_polymerization", 10)),
+                    # end_groups=(comp_config.get("end_groups", {}).get("left"), 
+                    #            comp_config.get("end_groups", {}).get("right")),
+                    end_groups=end_groups,
+                    tacticity=comp_config.get("tacticity", "atactic"),
+                )
+                self.polymer_components[name] = polymer_comp
+                logger.info(f"Added polymer component: {name} with DP={polymer_comp.degree_of_polymerization}, monomer={polymer_comp.monomer_smiles}")
                     
     def get_box_builder(self):
         """Get the appropriate box builder based on configuration."""
@@ -220,8 +266,10 @@ class PolymerElectrolyteProtocol(Protocol):
             Dictionary of non-bonded parameters for each component
         """
         from rdkit import Chem
-        from byteff2.model import load_model
-        from byteff2.utils import get_data_file_path
+        # from byteff2.model import load_model
+        from byteff2.train.utils import get_nb_params, load_model
+        # from byteff2.utils import get_data_file_path
+        from bytemol.utils import get_data_file_path
         
         model_dir = get_data_file_path('trained_models/optimal.pt', 'byteff2')
         model = load_model(os.path.dirname(model_dir))
@@ -230,6 +278,8 @@ class PolymerElectrolyteProtocol(Protocol):
         max_atoms_direct = self.config.get("max_atoms_direct_param", 500)
         
         for mol_name, smiles in component_smiles.items():
+            logger.info(f'Preparing force field params for {mol_name}')
+            
             mol = Chem.MolFromSmiles(smiles)
             if mol is None:
                 logger.warning(f"Could not parse SMILES for {mol_name}: {smiles}")
@@ -238,18 +288,31 @@ class PolymerElectrolyteProtocol(Protocol):
             num_atoms = mol.GetNumAtoms()
             
             if num_atoms > max_atoms_direct:
-                # Use fragment-based approach
+                # Use fragment-based approach for large molecules
                 logger.info(f"Using fragment-based parameterization for {mol_name} ({num_atoms} atoms)")
                 params = self._generate_polymer_params_fragmented(
                     model, mol_name, smiles
                 )
             else:
-                # Use standard approach
+                # Use standard approach for small molecules
                 params = self._generate_small_molecule_params(
                     model, mol_name, smiles, force
                 )
                 
             all_nb_params[mol_name] = params
+        
+        # Load metadata from any component's nb_params file
+        for mol_name in component_smiles.keys():
+            nb_meta_fp = os.path.join(self.params_dir, f'{mol_name}_nb_params.json')
+            if os.path.isfile(nb_meta_fp):
+                try:
+                    with open(nb_meta_fp, 'r') as f:
+                        meta_wrap = json.load(f)
+                        if isinstance(meta_wrap, dict) and 'metadata' in meta_wrap:
+                            all_nb_params['metadata'] = meta_wrap['metadata']
+                            break
+                except Exception:
+                    pass
             
         return all_nb_params
     
@@ -302,25 +365,67 @@ class PolymerElectrolyteProtocol(Protocol):
         Returns:
             Parameters dictionary
         """
-        # Use existing parameter generation logic
-        params_file = os.path.join(self.params_dir, f"{mol_name}_params.json")
+        # # Use existing parameter generation logic
+        # params_file = os.path.join(self.params_dir, f"{mol_name}_params.json")
         
-        if os.path.exists(params_file) and not force:
-            with open(params_file, 'r') as f:
-                return json.load(f)
+        # if os.path.exists(params_file) and not force:
+        #     with open(params_file, 'r') as f:
+        #         return json.load(f)
                 
+        # # Generate new parameters using model
+        # from byteff2.toolkit.param_generator import generate_params_from_smiles
+        
+        # params = generate_params_from_smiles(model, smiles, mol_name)
+        
+        # # Save parameters
+        # os.makedirs(self.params_dir, exist_ok=True)
+        # with open(params_file, 'w') as f:
+        #     json.dump(params, f, indent=2)
+            
+        # return params
+
+        from byteff2.train.utils import get_nb_params
+        from byteff2.toolkit.protocol import write_gro
+        from bytemol.core import Molecule
+        
+        # Check for cached parameters
+        itp_fp = os.path.join(self.params_dir, f'{mol_name}.itp')
+        atp_fp = os.path.join(self.params_dir, f'{mol_name}.atp')
+        gro_fp = os.path.join(self.params_dir, f'{mol_name}.gro')
+        params_json_fp = os.path.join(self.params_dir, f'{mol_name}.json')
+        nb_meta_fp = os.path.join(self.params_dir, f'{mol_name}_nb_params.json')
+        
+        have_all = all(os.path.isfile(p) for p in (itp_fp, atp_fp, gro_fp, params_json_fp))
+        
+        if have_all and not force:
+            logger.info(f'Found cached params for {mol_name}; loading from {params_json_fp}')
+            with open(params_json_fp, 'r') as f:
+                return json.load(f)
+        
         # Generate new parameters using model
-        from byteff2.toolkit.param_generator import generate_params_from_smiles
+        logger.info(f'Generating force field params for {mol_name}')
+        mol = Molecule.from_smiles(smiles, nconfs=1)
+        mol.name = mol_name
         
-        params = generate_params_from_smiles(model, smiles, mol_name)
+        metadata, params, tfs, mol = get_nb_params(model, mol)
         
-        # Save parameters
+        # Save ITP and ATP files
         os.makedirs(self.params_dir, exist_ok=True)
-        with open(params_file, 'w') as f:
+        tfs.write_itp(itp_fp, separated_atp=True)
+        
+        # Save GRO file
+        write_gro(mol, gro_fp)
+        
+        # Save parameters JSON
+        with open(params_json_fp, 'w') as f:
             json.dump(params, f, indent=2)
+        
+        # Save metadata
+        with open(nb_meta_fp, 'w') as f:
+            json.dump({'metadata': metadata}, f, indent=2)
             
         return params
-    
+
     def _map_fragment_params_to_polymer(self, fragment_params: dict, 
                                          atom_mapping: dict, 
                                          polymer_smiles: str) -> dict:
@@ -371,6 +476,32 @@ class PolymerDensityProtocol(PolymerElectrolyteProtocol, DensityProtocol):
     def __init__(self, output_dir: str, params_dir: Optional[str] = None):
         PolymerElectrolyteProtocol.__init__(self, output_dir, params_dir)
         
+    # def run(self):
+    #     """Run the polymer density protocol."""
+    #     logger.info("Running Polymer Density Protocol")
+        
+    #     # Build polymer chains if needed
+    #     if self.polymer_components:
+    #         struct_dir = os.path.join(self.output_dir, "structures")
+    #         self.build_polymer_chains(struct_dir)
+            
+    #     # Build simulation box
+    #     box_builder = self.get_box_builder()
+    #     system_gro = box_builder.build_box(
+    #         components=self._get_all_components(),
+    #         box_size=self._estimate_box_size(),
+    #         output_dir=self.output_dir,
+    #         target_density=self.config.get("target_density"),
+    #     )
+        
+    #     # Generate force field parameters
+    #     smiles_dict = {c.name: c.smiles for c in self._get_all_components()}
+    #     self.generate_ff_params_polymer(smiles_dict)
+        
+    #     # Run equilibration and production
+    #     self._run_polymer_equilibration()
+    #     self._run_density_production()
+
     def run(self):
         """Run the polymer density protocol."""
         logger.info("Running Polymer Density Protocol")
@@ -379,39 +510,140 @@ class PolymerDensityProtocol(PolymerElectrolyteProtocol, DensityProtocol):
         if self.polymer_components:
             struct_dir = os.path.join(self.output_dir, "structures")
             self.build_polymer_chains(struct_dir)
-            
-        # Build simulation box
-        box_builder = self.get_box_builder()
-        system_gro = box_builder.build_box(
-            components=self._get_all_components(),
-            box_size=self._estimate_box_size(),
-            output_dir=self.output_dir,
-            target_density=self.config.get("target_density"),
+        
+        # Get SMILES dictionary for all components
+        smiles_dict = {}
+        for comp in self._get_all_components():
+            smiles_dict[comp.name] = comp.smiles
+        
+        # Generate force field parameters first
+        nonbonded_params = self.generate_ff_params_polymer(smiles_dict)
+        
+        # Save nonbonded params for equilibration
+        params_json_path = os.path.join(self.output_dir, 'nonbonded_params.json')
+        with open(params_json_path, 'w') as f:
+            json.dump(nonbonded_params, f, indent=2)
+        
+        # Build components ratio dict
+        components_ratio = {}
+        for comp in self._get_all_components():
+            components_ratio[comp.name] = comp.molar_num
+        
+        # Use base Protocol's build_system
+        natoms = self.config.get("natoms", 5000)
+        self.components = self.build_system(
+            total_atoms=natoms,
+            components_ratio=components_ratio,
+            working_dir=self.output_dir,
         )
         
-        # Generate force field parameters
-        smiles_dict = {c.name: c.smiles for c in self._get_all_components()}
-        self.generate_ff_params_polymer(smiles_dict)
+        # Copy files to expected locations
+        import shutil
+        src_gro = os.path.join(self.params_dir, "solvent_salt.gro")
+        src_top = os.path.join(self.params_dir, "system.top")
+        dst_gro = os.path.join(self.output_dir, "system.gro")
+        dst_top = os.path.join(self.output_dir, "topol.top")
+        
+        if os.path.exists(src_gro):
+            shutil.copy(src_gro, dst_gro)
+        if os.path.exists(src_top):
+            shutil.copy(src_top, dst_top)
         
         # Run equilibration and production
         self._run_polymer_equilibration()
         self._run_density_production()
         
-    def _get_all_components(self) -> List[Component]:
+    # def _get_all_components(self) -> List[SimpleComponent]:
+    #     """Get all components including polymers."""
+    #     components: List[SimpleComponent] = list(self.polymer_components.values())
+    #     # Add non-polymer components from config
+    #     for name, comp in self.config.get("components", {}).items():
+    #         if isinstance(comp, dict) and comp.get("type") != "polymer":
+    #             smiles = self.config.get("smiles", {}).get(name, "")
+    #             components.append(SimpleComponent(
+    #                 name=name,
+    #                 smiles=smiles,
+    #                 type=ComponentType.CATION if "cation" in comp.get("type", "") 
+    #                      else ComponentType.ANION if "anion" in comp.get("type", "")
+    #                      else ComponentType.SOLVENT,
+    #                 molar_num=comp.get("count", 1),
+    #             ))
+    #     return components
+
+    def _get_all_components(self) -> List[SimpleComponent]:
         """Get all components including polymers."""
-        components = list(self.polymer_components.values())
+        components: List[SimpleComponent] = []
+        
+        # First add polymer components
+        for name, polymer_comp in self.polymer_components.items():
+            # For polymers, we need to generate the full SMILES from monomer
+            smiles = polymer_comp.smiles
+            
+            # Check if we need to generate SMILES from monomer
+            if (not smiles or smiles == "") and polymer_comp.monomer_smiles:
+                # Build a representative SMILES for the polymer
+                # For parameterization, we use a trimer (3 repeat units) as representative
+                try:
+                    from byteff2.toolkit.polymer_builder import PolymerChainBuilder
+                    
+                    # Determine end groups
+                    left_cap = polymer_comp.end_groups[0] if polymer_comp.end_groups else None
+                    right_cap = polymer_comp.end_groups[1] if polymer_comp.end_groups else None
+                    
+                    # Use smaller DP for parameterization (full chain would be too large)
+                    param_dp = min(3, polymer_comp.degree_of_polymerization)
+                    
+                    builder = PolymerChainBuilder(
+                        monomer_smiles=polymer_comp.monomer_smiles,
+                        dp=param_dp,
+                        end_group_left=left_cap,
+                        end_group_right=right_cap,
+                        tacticity=polymer_comp.tacticity,
+                    )
+                    smiles = builder.get_polymer_smiles()
+                    polymer_comp.smiles = smiles
+                    logger.info(f"Generated polymer SMILES for {name}: {smiles}")
+                except Exception as e:
+                    logger.warning(f"Could not generate polymer SMILES for {name}: {e}")
+                    # Fallback: use monomer SMILES directly (remove connection points)
+                    smiles = polymer_comp.monomer_smiles.replace('[*]', '')
+                    # If monomer is simple like "CCO", use it directly
+                    if not smiles:
+                        smiles = polymer_comp.monomer_smiles
+                    polymer_comp.smiles = smiles
+                    logger.info(f"Using fallback SMILES for {name}: {smiles}")
+            
+            if smiles:  # Only add if we have a valid SMILES
+                components.append(SimpleComponent(
+                    name=name,
+                    smiles=smiles,
+                    type=polymer_comp.type if hasattr(polymer_comp, 'type') else ComponentType.SOLVENT,
+                    molar_num=polymer_comp.molar_num if hasattr(polymer_comp, 'molar_num') else 1,
+                ))
+            else:
+                logger.warning(f"Skipping polymer component {name}: no SMILES available")
+        
         # Add non-polymer components from config
         for name, comp in self.config.get("components", {}).items():
             if isinstance(comp, dict) and comp.get("type") != "polymer":
                 smiles = self.config.get("smiles", {}).get(name, "")
-                components.append(Component(
-                    name=name,
-                    smiles=smiles,
-                    type=ComponentType.CATION if "cation" in comp.get("type", "") 
-                         else ComponentType.ANION if "anion" in comp.get("type", "")
-                         else ComponentType.SOLVENT,
-                    molar_num=comp.get("count", 1),
-                ))
+                if smiles:  # Only add if SMILES is available
+                    comp_type = comp.get("type", "")
+                    if "cation" in comp_type:
+                        component_type = ComponentType.CATION
+                    elif "anion" in comp_type:
+                        component_type = ComponentType.ANION
+                    else:
+                        component_type = ComponentType.SOLVENT
+                    
+                    components.append(SimpleComponent(
+                        name=name,
+                        smiles=smiles,
+                        type=component_type,
+                        molar_num=comp.get("count", 1),
+                    ))
+        
+        logger.info(f"Total components: {[c.name for c in components]}")
         return components
     
     def _estimate_box_size(self) -> float:
@@ -443,22 +675,38 @@ class PolymerDensityProtocol(PolymerElectrolyteProtocol, DensityProtocol):
         buffer_factor = self.config.get("box_buffer_factor", 1.2)
         return box_length_nm * buffer_factor
     
+    # def _run_polymer_equilibration(self):
+    #     """Run multi-stage equilibration for polymer system."""
+    #     from byteff2.toolkit.polymer_simulation import PolymerEquilibrationProtocol
+        
+    #     equil_protocol = PolymerEquilibrationProtocol(self.config)
+    #     equil_protocol.run(
+    #         topology_file=os.path.join(self.output_dir, "topol.top"),
+    #         structure_file=os.path.join(self.output_dir, "system.gro"),
+    #         output_dir=self.output_dir,
+    #     )
+        
     def _run_polymer_equilibration(self):
         """Run multi-stage equilibration for polymer system."""
         from byteff2.toolkit.polymer_simulation import PolymerEquilibrationProtocol
         
-        equil_protocol = PolymerEquilibrationProtocol(self.config)
-        equil_protocol.run(
-            topology_file=os.path.join(self.output_dir, "topol.top"),
-            structure_file=os.path.join(self.output_dir, "system.gro"),
+        equil_protocol = PolymerEquilibrationProtocol(
+            temperature=self.config.get("temperature", 300),
+            pressure=self.config.get("pressure", 1.0),
+            target_density=self.config.get("target_density"),
+            stages=self.config.get("equilibration_stages"),
             output_dir=self.output_dir,
         )
-        
+        equil_protocol.run_equilibration(
+            topology_path=os.path.join(self.output_dir, "topol.top"),
+            coordinates_path=os.path.join(self.output_dir, "system.gro"),
+            mdp_template_dir=self.output_dir,
+        )
+
     def _run_density_production(self):
         """Run production simulation for density calculation."""
         # Use parent class production run
         pass
-
 
 class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
     """
@@ -502,6 +750,37 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         # TransportProtocol attributes
         self.components = None
 
+    # def run(self):
+    #     """Run the polymer transport protocol."""
+    #     logger.info("Running Polymer Transport Protocol")
+        
+    #     # Build polymer chains if needed
+    #     if self.polymer_components:
+    #         struct_dir = os.path.join(self.output_dir, "structures")
+    #         self.build_polymer_chains(struct_dir)
+            
+    #     # Build simulation box using Packmol
+    #     box_builder = self.get_box_builder()
+    #     system_gro = box_builder.build_box(
+    #         components=self._get_all_components(),
+    #         box_size=self._estimate_box_size(),
+    #         output_dir=self.output_dir,
+    #         target_density=self.config.get("target_density"),
+    #     )
+        
+    #     # Generate force field parameters
+    #     smiles_dict = {c.name: c.smiles for c in self._get_all_components()}
+    #     self.generate_ff_params_polymer(smiles_dict)
+        
+    #     # Run equilibration
+    #     self._run_polymer_equilibration()
+        
+    #     # Run production NVT for transport properties
+    #     self._run_transport_production()
+        
+    #     # Post-process with polymer-specific analyses
+    #     self.post_process_polymer()
+
     def run(self):
         """Run the polymer transport protocol."""
         logger.info("Running Polymer Transport Protocol")
@@ -510,19 +789,44 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         if self.polymer_components:
             struct_dir = os.path.join(self.output_dir, "structures")
             self.build_polymer_chains(struct_dir)
-            
-        # Build simulation box using Packmol
-        box_builder = self.get_box_builder()
-        system_gro = box_builder.build_box(
-            components=self._get_all_components(),
-            box_size=self._estimate_box_size(),
-            output_dir=self.output_dir,
-            target_density=self.config.get("target_density"),
+        
+        # Get SMILES dictionary for all components
+        smiles_dict = {}
+        for comp in self._get_all_components():
+            smiles_dict[comp.name] = comp.smiles
+        
+        # Generate force field parameters first (creates .itp, .atp, .gro files)
+        nonbonded_params = self.generate_ff_params_polymer(smiles_dict)
+        
+        # Save nonbonded params for equilibration to use
+        params_json_path = os.path.join(self.output_dir, 'nonbonded_params.json')
+        with open(params_json_path, 'w') as f:
+            json.dump(nonbonded_params, f, indent=2)
+        
+        # Build components ratio dict for build_system
+        components_ratio = {}
+        for comp in self._get_all_components():
+            components_ratio[comp.name] = comp.molar_num
+        
+        # Use base Protocol's build_system which creates system.top and solvent_salt.gro
+        natoms = self.config.get("natoms", 5000)
+        self.components = self.build_system(
+            total_atoms=natoms,
+            components_ratio=components_ratio,
+            working_dir=self.output_dir,
         )
         
-        # Generate force field parameters
-        smiles_dict = {c.name: c.smiles for c in self._get_all_components()}
-        self.generate_ff_params_polymer(smiles_dict)
+        # Copy/rename files to expected locations for equilibration
+        import shutil
+        src_gro = os.path.join(self.params_dir, "solvent_salt.gro")
+        src_top = os.path.join(self.params_dir, "system.top")
+        dst_gro = os.path.join(self.output_dir, "system.gro")
+        dst_top = os.path.join(self.output_dir, "topol.top")
+        
+        if os.path.exists(src_gro):
+            shutil.copy(src_gro, dst_gro)
+        if os.path.exists(src_top):
+            shutil.copy(src_top, dst_top)
         
         # Run equilibration
         self._run_polymer_equilibration()
@@ -533,20 +837,96 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         # Post-process with polymer-specific analyses
         self.post_process_polymer()
         
-    def _get_all_components(self) -> List[Component]:
+    # def _get_all_components(self) -> List[SimpleComponent]:
+    #     """Get all components including polymers."""
+    #     components: List[SimpleComponent] = list(self.polymer_components.values())
+    #     for name, comp in self.config.get("components", {}).items():
+    #         if isinstance(comp, dict) and comp.get("type") != "polymer":
+    #             smiles = self.config.get("smiles", {}).get(name, "")
+    #             components.append(SimpleComponent(
+    #                 name=name,
+    #                 smiles=smiles,
+    #                 type=ComponentType.CATION if "cation" in comp.get("type", "") 
+    #                      else ComponentType.ANION if "anion" in comp.get("type", "")
+    #                      else ComponentType.SOLVENT,
+    #                 molar_num=comp.get("count", 1),
+    #             ))
+    #     return components
+
+    def _get_all_components(self) -> List[SimpleComponent]:
         """Get all components including polymers."""
-        components = list(self.polymer_components.values())
+        components: List[SimpleComponent] = []
+        
+        # First add polymer components
+        for name, polymer_comp in self.polymer_components.items():
+            # For polymers, we need to generate the full SMILES from monomer
+            smiles = polymer_comp.smiles
+            
+            # Check if we need to generate SMILES from monomer
+            if (not smiles or smiles == "") and polymer_comp.monomer_smiles:
+                # Build a representative SMILES for the polymer
+                # For parameterization, we use a trimer (3 repeat units) as representative
+                try:
+                    from byteff2.toolkit.polymer_builder import PolymerChainBuilder
+                    
+                    # Determine end groups
+                    left_cap = polymer_comp.end_groups[0] if polymer_comp.end_groups else None
+                    right_cap = polymer_comp.end_groups[1] if polymer_comp.end_groups else None
+                    
+                    # Use smaller DP for parameterization (full chain would be too large)
+                    param_dp = min(3, polymer_comp.degree_of_polymerization)
+                    
+                    builder = PolymerChainBuilder(
+                        monomer_smiles=polymer_comp.monomer_smiles,
+                        dp=param_dp,
+                        end_group_left=left_cap,
+                        end_group_right=right_cap,
+                        tacticity=polymer_comp.tacticity,
+                    )
+                    smiles = builder.get_polymer_smiles()
+                    polymer_comp.smiles = smiles
+                    logger.info(f"Generated polymer SMILES for {name}: {smiles}")
+                except Exception as e:
+                    logger.warning(f"Could not generate polymer SMILES for {name}: {e}")
+                    # Fallback: use monomer SMILES directly (remove connection points)
+                    smiles = polymer_comp.monomer_smiles.replace('[*]', '')
+                    # If monomer is simple like "CCO", use it directly
+                    if not smiles:
+                        smiles = polymer_comp.monomer_smiles
+                    polymer_comp.smiles = smiles
+                    logger.info(f"Using fallback SMILES for {name}: {smiles}")
+            
+            if smiles:  # Only add if we have a valid SMILES
+                components.append(SimpleComponent(
+                    name=name,
+                    smiles=smiles,
+                    type=polymer_comp.type if hasattr(polymer_comp, 'type') else ComponentType.SOLVENT,
+                    molar_num=polymer_comp.molar_num if hasattr(polymer_comp, 'molar_num') else 1,
+                ))
+            else:
+                logger.warning(f"Skipping polymer component {name}: no SMILES available")
+        
+        # Add non-polymer components from config
         for name, comp in self.config.get("components", {}).items():
             if isinstance(comp, dict) and comp.get("type") != "polymer":
                 smiles = self.config.get("smiles", {}).get(name, "")
-                components.append(Component(
-                    name=name,
-                    smiles=smiles,
-                    type=ComponentType.CATION if "cation" in comp.get("type", "") 
-                         else ComponentType.ANION if "anion" in comp.get("type", "")
-                         else ComponentType.SOLVENT,
-                    molar_num=comp.get("count", 1),
-                ))
+                if smiles:  # Only add if SMILES is available
+                    comp_type = comp.get("type", "")
+                    if "cation" in comp_type:
+                        component_type = ComponentType.CATION
+                    elif "anion" in comp_type:
+                        component_type = ComponentType.ANION
+                    else:
+                        component_type = ComponentType.SOLVENT
+                    
+                    components.append(SimpleComponent(
+                        name=name,
+                        smiles=smiles,
+                        type=component_type,
+                        molar_num=comp.get("count", 1),
+                    ))
+        
+        logger.info(f"Total components: {[c.name for c in components]}")
         return components
     
     def _estimate_box_size(self) -> float:
@@ -571,15 +951,32 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         buffer_factor = self.config.get("box_buffer_factor", 1.2)
         return box_length_nm * buffer_factor
     
+    # def _run_polymer_equilibration(self):
+    #     """Run multi-stage equilibration for polymer system."""
+    #     from byteff2.toolkit.polymer_simulation import PolymerEquilibrationProtocol
+        
+    #     equil_protocol = PolymerEquilibrationProtocol(self.config)
+    #     equil_protocol.run(
+    #         topology_file=os.path.join(self.output_dir, "topol.top"),
+    #         structure_file=os.path.join(self.output_dir, "system.gro"),
+    #         output_dir=self.output_dir,
+    #     )
+        
     def _run_polymer_equilibration(self):
         """Run multi-stage equilibration for polymer system."""
         from byteff2.toolkit.polymer_simulation import PolymerEquilibrationProtocol
         
-        equil_protocol = PolymerEquilibrationProtocol(self.config)
-        equil_protocol.run(
-            topology_file=os.path.join(self.output_dir, "topol.top"),
-            structure_file=os.path.join(self.output_dir, "system.gro"),
+        equil_protocol = PolymerEquilibrationProtocol(
+            temperature=self.config.get("temperature", 300),
+            pressure=self.config.get("pressure", 1.0),
+            target_density=self.config.get("target_density"),
+            stages=self.config.get("equilibration_stages"),
             output_dir=self.output_dir,
+        )
+        equil_protocol.run_equilibration(
+            topology_path=os.path.join(self.output_dir, "topol.top"),
+            coordinates_path=os.path.join(self.output_dir, "system.gro"),
+            mdp_template_dir=self.output_dir,
         )
         
     def _run_transport_production(self):
@@ -658,6 +1055,10 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         # Placeholder for hopping analysis
         return {"hopping_rate": None, "residence_time": None}
 
+    def run_full_workflow(self):
+        """Run the complete polymer transport workflow."""
+        logger.info("Running Polymer Transport Protocol - Full Workflow")
+        self.run()
 
 def get_polymer_protocol(config: dict) -> Protocol:
     """
