@@ -32,6 +32,10 @@ class PolymerChainBuilder:
     - PEO: "[*]CCO[*]" or "[*]OCC[*]"
     - PPO: "[*]OC(C)C[*]"
     
+    IMPORTANT: The order of [*] in SMILES determines connectivity:
+    - First [*] = LEFT attachment point (will connect to previous monomer's RIGHT)
+    - Second [*] = RIGHT attachment point (will connect to next monomer's LEFT)
+
     Attributes:
         monomer_smiles: SMILES string of monomer with [*] connection points
         dp: Degree of polymerization (number of repeat units)
@@ -42,8 +46,8 @@ class PolymerChainBuilder:
     def __init__(self, monomer_smiles: str, dp: int,
                  end_group_left: Optional[str] = None,
                  end_group_right: Optional[str] = None,
-                 tacticity: str = "atactic",
-                 random_seed: Optional[int] = None):
+                 tacticity: str = "atactic"):
+                #  random_seed: Optional[int] = None):
         """
         Initialize polymer chain builder.
         
@@ -60,14 +64,37 @@ class PolymerChainBuilder:
         self.end_group_left = end_group_left
         self.end_group_right = end_group_right
         self.tacticity = tacticity
-        self.random_seed = random_seed
+        # self.random_seed = random_seed
+        self._polymer_mol = None
+        self._polymer_smiles = None
         
-        if random_seed is not None:
-            random.seed(random_seed)
+        # if random_seed is not None:
+        #     random.seed(random_seed)
             
-        # Validate monomer SMILES
-        self._validate_monomer()
+        # # Validate monomer SMILES
+        # self._validate_monomer()
         
+    def _find_attachment_points(self, mol) -> List[int]:
+        """Find indices of dummy atoms ([*]) used as attachment points.
+        Returns them in the order they appear in the SMILES string,
+        which determines left (first) vs right (second) connectivity.
+        """
+        attachment_points = []
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 0:  # Dummy atom [*]
+                attachment_points.append(atom.GetIdx())
+        return attachment_points
+    
+    def _get_neighbor_of_dummy(self, mol, dummy_idx: int) -> int:
+        """Get the index of the real atom bonded to a dummy atom."""
+        atom = mol.GetAtomWithIdx(dummy_idx)
+        neighbors = atom.GetNeighbors()
+        if len(neighbors) != 1:
+            raise ValueError(
+                f"Dummy atom at index {dummy_idx} has {len(neighbors)} neighbors; expected 1"
+            )
+        return neighbors[0].GetIdx()
+    
     def _validate_monomer(self):
         """Validate that monomer SMILES has exactly 2 connection points."""
         # Count connection points
@@ -82,197 +109,448 @@ class PolymerChainBuilder:
         """
         Build a polymer chain by connecting monomers.
         
+        Uses CombineMols + RWMol to iteratively join monomer units
+        instead of SMILES string concatenation.
+        
         Returns:
-            RDKit Mol object representing the polymer chain
+            RDKit Mol object of the full polymer chain
         """
+        monomer = Chem.MolFromSmiles(self.monomer_smiles)
+        if monomer is None:
+            raise ValueError(f"Could not parse monomer SMILES: {self.monomer_smiles}")
+        
+        attachment_points = self._find_attachment_points(monomer)
+        if len(attachment_points) != 2:
+            raise ValueError(
+                f"Monomer must have exactly 2 attachment points [*], "
+                f"found {len(attachment_points)} in '{self.monomer_smiles}'"
+            )
+        
         logger.info(f"Building polymer chain: DP={self.dp}, monomer={self.monomer_smiles}")
         
-        # Generate polymer SMILES by repeating monomer
-        polymer_smiles = self._generate_polymer_smiles()
+        # Build using RDKit molecular editing (avoids SMILES nesting limit)
+        polymer = self._build_chain_rwmol(monomer, attachment_points)
         
-        # Create RDKit molecule
-        mol = Chem.MolFromSmiles(polymer_smiles)
-        if mol is None:
-            raise ValueError(f"Could not parse polymer SMILES: {polymer_smiles}")
+        if polymer is None:
+            raise ValueError(f"Failed to build polymer chain with DP={self.dp}")
+        
+        # Add explicit Hs for proper 3D embedding
+        polymer = Chem.AddHs(polymer)
+
+        # Generate 3D coordinates
+        # try:
+        #     AllChem.EmbedMolecule(polymer, AllChem.ETKDGv3())
+        #     AllChem.MMFFOptimizeMolecule(polymer, maxIters=500)
+        # except Exception as e:
+        #     logger.warning(f"3D coordinate generation failed, trying fallback: {e}")
+        #     try:
+        #         AllChem.EmbedMolecule(polymer, AllChem.ETKDGv3(), maxAttempts=50)
+        #     except Exception as e2:
+        #         logger.warning(f"Fallback embedding also failed: {e2}")
+        #         # Use 2D coords as last resort
+        #         AllChem.Compute2DCoords(polymer)
+        try:
+            params = AllChem.ETKDGv3()
+            params.useRandomCoords = True  # Better for large molecules
+            params.maxIterations = 5000
+            result = AllChem.EmbedMolecule(polymer, params)
+            if result == 0:
+                try:
+                    AllChem.MMFFOptimizeMolecule(polymer, maxIters=500)
+                except Exception:
+                    pass  # Optimization failure is non-fatal
+            else:
+                raise RuntimeError(f"EmbedMolecule returned {result}")
+        except Exception as e:
+            logger.warning(f"3D coordinate generation failed, trying fallback: {e}")
+            try:
+                params2 = AllChem.ETKDGv2()
+                params2.useRandomCoords = True
+                params2.maxIterations = 10000
+                result = AllChem.EmbedMolecule(polymer, params2)
+                if result != 0:
+                    logger.warning("ETKDGv2 also failed, using random coordinates")
+                    AllChem.EmbedMolecule(polymer, useRandomCoords=True)
+            except Exception as e2:
+                logger.warning(f"All 3D embedding failed: {e2}")
+                AllChem.Compute2DCoords(polymer)
+        
+        # Remove explicit Hs to keep atom count consistent with SMILES
+        polymer = Chem.RemoveHs(polymer)
+        
+        self._polymer_mol = polymer
+        self._polymer_smiles = Chem.MolToSmiles(polymer)
+        
+        logger.info(f"Built polymer with {polymer.GetNumAtoms()} atoms")
+        return polymer
+    
+    # def _generate_polymer_smiles(self) -> str:
+    #     """
+    #     Generate full polymer SMILES from monomer.
+        
+    #     Returns:
+    #         Full polymer SMILES string
+    #     """
+    #     # Replace [*] with numbered connection points for joining
+    #     monomer = self.monomer_smiles.replace('[*]', '[{}H]', 1)
+    #     monomer = monomer.replace('[*]', '[{}H]', 1)
+        
+    #     # For simple polymers, we can use a simpler approach:
+    #     # Remove the [*] markers and join monomers directly
+        
+    #     # Get the core monomer by removing connection points
+    #     core = self.monomer_smiles.replace('[*]', '')
+        
+    #     # Build polymer by repeating core
+    #     if self.dp == 1:
+    #         polymer_core = core
+    #     else:
+    #         # For longer chains, need to handle connectivity properly
+    #         polymer_core = self._build_connected_chain()
             
-        # Add hydrogens
-        mol = Chem.AddHs(mol)
-        
-        # Generate 3D conformer
-        mol = self._generate_3d_conformer(mol)
-        
-        # Apply tacticity if specified
-        if self.tacticity != "atactic":
-            mol = self._apply_tacticity(mol)
+    #     # Add end groups
+    #     if self.end_group_left:
+    #         polymer_core = self.end_group_left + polymer_core
+    #     if self.end_group_right:
+    #         polymer_core = polymer_core + self.end_group_right
             
-        logger.info(f"Built polymer with {mol.GetNumAtoms()} atoms")
+    #     return polymer_core
+    
+    # def _build_connected_chain(self) -> str:
+    #     """
+    #     Build connected polymer chain using RDKit reactions.
+        
+    #     Returns:
+    #         SMILES of connected polymer
+    #     """
+    #     # Parse monomer - replace [*] with labeled atoms for connection
+    #     # Use isotope labels to mark connection points
+    #     labeled_smiles = self.monomer_smiles.replace('[*]', '[3H]', 1)
+    #     labeled_smiles = labeled_smiles.replace('[*]', '[3H]', 1)
+        
+    #     monomer_mol = Chem.MolFromSmiles(labeled_smiles)
+    #     if monomer_mol is None:
+    #         raise ValueError(f"Could not parse labeled monomer: {labeled_smiles}")
+            
+    #     # Find the tritium atoms (our connection points)
+    #     tritium_indices = []
+    #     for atom in monomer_mol.GetAtoms():
+    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
+    #             tritium_indices.append(atom.GetIdx())
+                
+    #     if len(tritium_indices) != 2:
+    #         raise ValueError(f"Expected 2 connection points, found {len(tritium_indices)}")
+            
+    #     # Build chain iteratively
+    #     growing_chain = Chem.RWMol(monomer_mol)
+        
+    #     for i in range(self.dp - 1):
+    #         # Add another monomer unit
+    #         new_monomer = Chem.MolFromSmiles(labeled_smiles)
+    #         growing_chain = self._connect_monomers(growing_chain, new_monomer)
+            
+    #     # Convert tritium back to hydrogen for end groups
+    #     final_mol = growing_chain.GetMol()
+    #     final_smiles = Chem.MolToSmiles(final_mol)
+        
+    #     # Remove isotope labels
+    #     final_smiles = final_smiles.replace('[3H]', '')
+        
+    #     return final_smiles
+    
+    # def _connect_monomers(self, mol1: Chem.RWMol, mol2: Chem.Mol) -> Chem.RWMol:
+    #     """
+    #     Connect two monomer units at their connection points.
+        
+    #     Args:
+    #         mol1: First molecule (growing chain)
+    #         mol2: Second molecule (new monomer)
+            
+    #     Returns:
+    #         Combined molecule
+    #     """
+    #     # Find tritium atoms in mol1 (right end) and mol2 (left end)
+    #     t1_idx = None
+    #     t2_idx = None
+        
+    #     for atom in mol1.GetAtoms():
+    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
+    #             # Get the rightmost tritium (highest index)
+    #             if t1_idx is None or atom.GetIdx() > t1_idx:
+    #                 t1_idx = atom.GetIdx()
+                    
+    #     for atom in mol2.GetAtoms():
+    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
+    #             # Get the leftmost tritium (lowest index)
+    #             if t2_idx is None or atom.GetIdx() < t2_idx:
+    #                 t2_idx = atom.GetIdx()
+                    
+    #     if t1_idx is None or t2_idx is None:
+    #         raise ValueError("Could not find connection points in monomers")
+            
+    #     # Get the atoms connected to the tritiums
+    #     t1_neighbor = mol1.GetAtomWithIdx(t1_idx).GetNeighbors()[0].GetIdx()
+        
+    #     # Combine molecules
+    #     combo = Chem.CombineMols(mol1.GetMol(), mol2)
+    #     combo = Chem.RWMol(combo)
+        
+    #     # Adjust t2_idx for combined molecule
+    #     offset = mol1.GetNumAtoms()
+    #     t2_idx_combo = t2_idx + offset
+    #     t2_neighbor = combo.GetAtomWithIdx(t2_idx_combo).GetNeighbors()[0].GetIdx()
+        
+    #     # Add bond between the neighbors
+    #     combo.AddBond(t1_neighbor, t2_neighbor, Chem.BondType.SINGLE)
+        
+    #     # Remove the tritium atoms (in reverse order to maintain indices)
+    #     to_remove = sorted([t1_idx, t2_idx_combo], reverse=True)
+    #     for idx in to_remove:
+    #         combo.RemoveAtom(idx)
+            
+    #     return combo
+    
+    # def _generate_3d_conformer(self, mol: Chem.Mol) -> Chem.Mol:
+    #     """
+    #     Generate 3D conformer for the polymer.
+        
+    #     For long chains, uses a multi-stage approach to avoid
+    #     bad conformations.
+        
+    #     Args:
+    #         mol: RDKit molecule
+            
+    #     Returns:
+    #         Molecule with 3D coordinates
+    #     """
+    #     params = AllChem.ETKDGv3()
+    #     params.randomSeed = self.random_seed if self.random_seed else -1
+    #     params.maxIterations = 5000
+        
+    #     # For very long chains, use more attempts
+    #     if mol.GetNumAtoms() > 200:
+    #         params.numThreads = 0  # Use all available threads
+    #         params.useRandomCoords = True
+            
+    #     result = AllChem.EmbedMolecule(mol, params)
+        
+    #     if result != 0:
+    #         # Fallback to simpler embedding
+    #         logger.warning("ETKDGv3 failed, trying simpler embedding")
+    #         AllChem.EmbedMolecule(mol, AllChem.ETKDGv2())
+            
+    #     # Optimize geometry
+    #     try:
+    #         if mol.GetNumAtoms() < 500:
+    #             AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
+    #         else:
+    #             # For large molecules, use UFF which is faster
+    #             AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+    #     except Exception as e:
+    #         logger.warning(f"Force field optimization failed: {e}")
+            
+    #     return mol
+    
+    def _build_chain_rwmol(self, monomer: Chem.Mol, attachment_points: List[int]) -> Chem.Mol:
+        """
+        Build polymer chain by iteratively combining monomer units using RWMol.
+        
+        The key insight: we connect the NEIGHBOR of the right dummy to the NEIGHBOR
+        of the left dummy. For [*]OC(C(C)F)[*]:
+        - Left dummy's neighbor is O
+        - Right dummy's neighbor is C
+        
+        So we form: ...-O-[from growing chain] + [C-from new monomer]-...
+        Which gives: ...-O-C-... (ether linkage) ✓
+        
+        NOT: ...-O-[from growing] + [O-from new]-... which would give O-O (peroxy) ✗
+        """
+    def _build_chain_rwmol(self, monomer: Chem.Mol, attachment_points: List[int]) -> Chem.Mol:
+        """
+        Build polymer chain by iteratively combining monomer units.
+        
+        The key insight: we connect the NEIGHBOR of the right dummy to the NEIGHBOR
+        of the left dummy. For [*]OC(C(C)F)[*]:
+        - Left dummy's neighbor is O
+        - Right dummy's neighbor is C
+        
+        So we form: ...-O-[from growing chain] + [C-from new monomer]-...
+        Which gives: ...-O-C-... (ether linkage) ✓
+        
+        NOT: ...-O-[from growing] + [O-from new]-... which would give O-O (peroxy) ✗
+        """
+        # Identify left/right dummies and their real neighbors
+        left_dummy = attachment_points[0]
+        right_dummy = attachment_points[1]
+        
+        # Get the real atoms bonded to the dummies
+        left_neighbor = self._get_neighbor_of_dummy(monomer, left_dummy)
+        right_neighbor = self._get_neighbor_of_dummy(monomer, right_dummy)
+        
+        # Log for debugging
+        left_atom = monomer.GetAtomWithIdx(left_neighbor)
+        right_atom = monomer.GetAtomWithIdx(right_neighbor)
+        logger.debug(f"Monomer: left dummy {left_dummy} -> {left_atom.GetSymbol()}({left_neighbor}), "
+                     f"right dummy {right_dummy} -> {right_atom.GetSymbol()}({right_neighbor})")
+        
+        # Get bond type (usually single)
+        bond = monomer.GetBondBetweenAtoms(left_dummy, left_neighbor)
+        bond_type = bond.GetBondType() if bond else Chem.BondType.SINGLE
+        
+        # Start with first monomer
+        growing = Chem.RWMol(monomer)
+        current_right_dummy = right_dummy
+        
+        for i in range(1, self.dp):
+            # Create fresh monomer
+            new_monomer = Chem.MolFromSmiles(self.monomer_smiles)
+            new_ap = self._find_attachment_points(new_monomer)
+            new_left_dummy = new_ap[0]
+            new_right_dummy = new_ap[1]
+            
+            # Get the real atoms to connect BEFORE combining molecules
+            # From growing chain: the atom bonded to the right dummy
+            growing_connect_atom = self._get_neighbor_of_dummy(growing, current_right_dummy)
+            # From new monomer: the atom bonded to the left dummy
+            new_connect_atom = self._get_neighbor_of_dummy(new_monomer, new_left_dummy)
+            
+            # Combine molecules
+            offset = growing.GetNumAtoms()
+            combo = Chem.RWMol(Chem.CombineMols(growing, new_monomer))
+            
+            # Adjust indices for combined molecule
+            combo_growing_connect = growing_connect_atom  # unchanged
+            combo_new_connect = new_connect_atom + offset
+            combo_growing_right_dummy = current_right_dummy
+            combo_new_left_dummy = new_left_dummy + offset
+            combo_new_right_dummy = new_right_dummy + offset
+            
+            # Add bond between the real atoms (NOT the dummies)
+            # This connects: growing_chain[right_neighbor] - new_monomer[left_neighbor]
+            combo.AddBond(combo_growing_connect, combo_new_connect, bond_type)
+            
+            # Remove the linked dummies (higher index first)
+            dummies_to_remove = sorted([combo_growing_right_dummy, combo_new_left_dummy], reverse=True)
+            
+            # Track index shifts
+            new_right_dummy_final = combo_new_right_dummy
+            for d_idx in dummies_to_remove:
+                combo.RemoveAtom(d_idx)
+                if d_idx < new_right_dummy_final:
+                    new_right_dummy_final -= 1
+            
+            current_right_dummy = new_right_dummy_final
+            
+            try:
+                Chem.SanitizeMol(combo)
+            except Exception as e:
+                logger.warning(f"Sanitization warning at DP={i+1}: {e}")
+            
+            growing = combo
+        
+        # Cap the ends
+        return self._cap_chain_ends(growing)
+    
+    def _cap_chain_ends(self, chain: Chem.Mol) -> Chem.Mol:
+        """
+        Cap the chain ends by replacing remaining dummy atoms with end groups.
+        
+        If no end groups specified, simply remove dummies and add H.
+        """
+        rw = Chem.RWMol(chain)
+        
+        # Find remaining dummy atoms
+        dummies = []
+        for atom in rw.GetAtoms():
+            if atom.GetAtomicNum() == 0:
+                dummies.append(atom.GetIdx())
+        
+        if len(dummies) == 0:
+            # No dummies left; chain is already capped
+            mol = rw.GetMol()
+            Chem.SanitizeMol(mol)
+            return mol
+        
+        if self.end_group_left and self.end_group_right and len(dummies) >= 2:
+            # Cap with specified end groups using fragment attachment
+            mol = self._attach_end_groups(rw, dummies)
+        else:
+            # Simple capping: remove dummies (hydrogen will be implicit)
+            for d_idx in sorted(dummies, reverse=True):
+                # Get the neighbor to adjust its implicit H count
+                neighbor_idx = self._get_neighbor_of_dummy(rw, d_idx)
+                rw.RemoveAtom(d_idx)
+                # After removal, neighbor_idx may shift if d_idx < neighbor_idx
+                # Recalculate
+            
+            try:
+                mol = rw.GetMol()
+                Chem.SanitizeMol(mol)
+            except Exception:
+                mol = rw.GetMol()
+            
         return mol
     
-    def _generate_polymer_smiles(self) -> str:
-        """
-        Generate full polymer SMILES from monomer.
+    def _attach_end_groups(self, chain: Chem.RWMol, dummy_indices: List[int]) -> Chem.Mol:
+        """Attach end group molecules to chain ends."""
+        # Sort dummies: first = left end, last = right end
+        dummy_indices = sorted(dummy_indices)
+        left_dummy = dummy_indices[0]
+        right_dummy = dummy_indices[-1]
         
-        Returns:
-            Full polymer SMILES string
-        """
-        # Replace [*] with numbered connection points for joining
-        monomer = self.monomer_smiles.replace('[*]', '[{}H]', 1)
-        monomer = monomer.replace('[*]', '[{}H]', 1)
+        left_cap_mol = Chem.MolFromSmiles(self.end_group_left) if self.end_group_left else None
+        right_cap_mol = Chem.MolFromSmiles(self.end_group_right) if self.end_group_right else None
         
-        # For simple polymers, we can use a simpler approach:
-        # Remove the [*] markers and join monomers directly
+        # For simple end groups (like "C" for methyl, "O" for hydroxyl),
+        # replace dummy with the end group atom
+        result = Chem.RWMol(chain)
         
-        # Get the core monomer by removing connection points
-        core = self.monomer_smiles.replace('[*]', '')
+        # Process right end first (higher index, won't affect left index)
+        caps = [(right_dummy, right_cap_mol), (left_dummy, left_cap_mol)]
         
-        # Build polymer by repeating core
-        if self.dp == 1:
-            polymer_core = core
-        else:
-            # For longer chains, need to handle connectivity properly
-            polymer_core = self._build_connected_chain()
+        for d_idx, cap_mol in sorted(caps, key=lambda x: x[0], reverse=True):
+            if cap_mol is None:
+                # Just remove dummy
+                result.RemoveAtom(d_idx)
+                continue
             
-        # Add end groups
-        if self.end_group_left:
-            polymer_core = self.end_group_left + polymer_core
-        if self.end_group_right:
-            polymer_core = polymer_core + self.end_group_right
+            neighbor_idx = self._get_neighbor_of_dummy(result, d_idx)
             
-        return polymer_core
-    
-    def _build_connected_chain(self) -> str:
-        """
-        Build connected polymer chain using RDKit reactions.
-        
-        Returns:
-            SMILES of connected polymer
-        """
-        # Parse monomer - replace [*] with labeled atoms for connection
-        # Use isotope labels to mark connection points
-        labeled_smiles = self.monomer_smiles.replace('[*]', '[3H]', 1)
-        labeled_smiles = labeled_smiles.replace('[*]', '[3H]', 1)
-        
-        monomer_mol = Chem.MolFromSmiles(labeled_smiles)
-        if monomer_mol is None:
-            raise ValueError(f"Could not parse labeled monomer: {labeled_smiles}")
-            
-        # Find the tritium atoms (our connection points)
-        tritium_indices = []
-        for atom in monomer_mol.GetAtoms():
-            if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-                tritium_indices.append(atom.GetIdx())
-                
-        if len(tritium_indices) != 2:
-            raise ValueError(f"Expected 2 connection points, found {len(tritium_indices)}")
-            
-        # Build chain iteratively
-        growing_chain = Chem.RWMol(monomer_mol)
-        
-        for i in range(self.dp - 1):
-            # Add another monomer unit
-            new_monomer = Chem.MolFromSmiles(labeled_smiles)
-            growing_chain = self._connect_monomers(growing_chain, new_monomer)
-            
-        # Convert tritium back to hydrogen for end groups
-        final_mol = growing_chain.GetMol()
-        final_smiles = Chem.MolToSmiles(final_mol)
-        
-        # Remove isotope labels
-        final_smiles = final_smiles.replace('[3H]', '')
-        
-        return final_smiles
-    
-    def _connect_monomers(self, mol1: Chem.RWMol, mol2: Chem.Mol) -> Chem.RWMol:
-        """
-        Connect two monomer units at their connection points.
-        
-        Args:
-            mol1: First molecule (growing chain)
-            mol2: Second molecule (new monomer)
-            
-        Returns:
-            Combined molecule
-        """
-        # Find tritium atoms in mol1 (right end) and mol2 (left end)
-        t1_idx = None
-        t2_idx = None
-        
-        for atom in mol1.GetAtoms():
-            if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-                # Get the rightmost tritium (highest index)
-                if t1_idx is None or atom.GetIdx() > t1_idx:
-                    t1_idx = atom.GetIdx()
-                    
-        for atom in mol2.GetAtoms():
-            if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-                # Get the leftmost tritium (lowest index)
-                if t2_idx is None or atom.GetIdx() < t2_idx:
-                    t2_idx = atom.GetIdx()
-                    
-        if t1_idx is None or t2_idx is None:
-            raise ValueError("Could not find connection points in monomers")
-            
-        # Get the atoms connected to the tritiums
-        t1_neighbor = mol1.GetAtomWithIdx(t1_idx).GetNeighbors()[0].GetIdx()
-        
-        # Combine molecules
-        combo = Chem.CombineMols(mol1.GetMol(), mol2)
-        combo = Chem.RWMol(combo)
-        
-        # Adjust t2_idx for combined molecule
-        offset = mol1.GetNumAtoms()
-        t2_idx_combo = t2_idx + offset
-        t2_neighbor = combo.GetAtomWithIdx(t2_idx_combo).GetNeighbors()[0].GetIdx()
-        
-        # Add bond between the neighbors
-        combo.AddBond(t1_neighbor, t2_neighbor, Chem.BondType.SINGLE)
-        
-        # Remove the tritium atoms (in reverse order to maintain indices)
-        to_remove = sorted([t1_idx, t2_idx_combo], reverse=True)
-        for idx in to_remove:
-            combo.RemoveAtom(idx)
-            
-        return combo
-    
-    def _generate_3d_conformer(self, mol: Chem.Mol) -> Chem.Mol:
-        """
-        Generate 3D conformer for the polymer.
-        
-        For long chains, uses a multi-stage approach to avoid
-        bad conformations.
-        
-        Args:
-            mol: RDKit molecule
-            
-        Returns:
-            Molecule with 3D coordinates
-        """
-        params = AllChem.ETKDGv3()
-        params.randomSeed = self.random_seed if self.random_seed else -1
-        params.maxIterations = 5000
-        
-        # For very long chains, use more attempts
-        if mol.GetNumAtoms() > 200:
-            params.numThreads = 0  # Use all available threads
-            params.useRandomCoords = True
-            
-        result = AllChem.EmbedMolecule(mol, params)
-        
-        if result != 0:
-            # Fallback to simpler embedding
-            logger.warning("ETKDGv3 failed, trying simpler embedding")
-            AllChem.EmbedMolecule(mol, AllChem.ETKDGv2())
-            
-        # Optimize geometry
-        try:
-            if mol.GetNumAtoms() < 500:
-                AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
+            if cap_mol.GetNumAtoms() == 1:
+                # Simple atom cap: replace dummy with this atom
+                cap_atom = cap_mol.GetAtomWithIdx(0)
+                result.ReplaceAtom(d_idx, cap_atom)
             else:
-                # For large molecules, use UFF which is faster
-                AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+                # Multi-atom end group: combine and bond
+                # Find attachment point in cap (look for [*] or use first atom)
+                cap_attachment = 0
+                for atom in cap_mol.GetAtoms():
+                    if atom.GetAtomicNum() == 0:
+                        cap_attachment = atom.GetIdx()
+                        break
+                
+                combo = Chem.RWMol(Chem.CombineMols(result, cap_mol))
+                offset = result.GetNumAtoms()
+                
+                cap_real = offset + cap_attachment
+                cap_neighbor = self._get_neighbor_of_dummy(combo, cap_real) if cap_mol.GetAtomWithIdx(cap_attachment).GetAtomicNum() == 0 else cap_real
+                
+                combo.AddBond(neighbor_idx, cap_neighbor, Chem.BondType.SINGLE)
+                
+                # Remove dummies
+                dummies_to_remove = sorted([d_idx, cap_real] if cap_mol.GetAtomWithIdx(cap_attachment).GetAtomicNum() == 0 else [d_idx], reverse=True)
+                for rm_idx in dummies_to_remove:
+                    combo.RemoveAtom(rm_idx)
+                
+                result = combo
+        
+        try:
+            mol = result.GetMol()
+            Chem.SanitizeMol(mol)
         except Exception as e:
-            logger.warning(f"Force field optimization failed: {e}")
-            
+            logger.warning(f"End group capping sanitization: {e}")
+            mol = result.GetMol()
+        
         return mol
     
     def _apply_tacticity(self, mol: Chem.Mol) -> Chem.Mol:
@@ -314,53 +592,46 @@ class PolymerChainBuilder:
         return rw_mol.GetMol()
     
     def get_polymer_smiles(self) -> str:
-        """
-        Get the SMILES string of the built polymer.
-        
-        Returns:
-            Polymer SMILES string
-        """
-        return self._generate_polymer_smiles()
+        """Get SMILES of built polymer. Build if not done."""
+        if self._polymer_smiles is None:
+            self.build_chain()
+        return self._polymer_smiles
     
-    def save_pdb(self, mol: Chem.Mol, output_path: str, 
-                 resname: str = "MOL"):
-        """
-        Save polymer to PDB file.
+    def save_pdb(self, mol: Chem.Mol, output_path: str, resname: str = "POL"):
+        """Save polymer to PDB file."""
+        # Ensure 3D coordinates exist
+        if mol.GetNumConformers() == 0:
+            AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
         
-        Args:
-            mol: RDKit molecule with 3D coordinates
-            output_path: Output file path
-            resname: Residue name (max 3 characters)
-        """
-        # Set residue info
-        for atom in mol.GetAtoms():
-            mi = Chem.AtomPDBResidueInfo()
-            mi.SetResidueName(resname[:3])
-            mi.SetResidueNumber(1)
-            mi.SetIsHeteroAtom(True)
-            atom.SetPDBResidueInfo(mi)
-            
         Chem.MolToPDBFile(mol, output_path)
+        
+        # Fix residue name in PDB
+        with open(output_path, 'r') as f:
+            content = f.read()
+        content = content.replace('UNL', resname[:3].ljust(3))
+        with open(output_path, 'w') as f:
+            f.write(content)
+        
         logger.info(f"Saved polymer to {output_path}")
         
-    def generate_mapped_smiles(self) -> str:
-        """
-        Generate atom-mapped SMILES for the full polymer chain.
+    # def generate_mapped_smiles(self) -> str:
+    #     """
+    #     Generate atom-mapped SMILES for the full polymer chain.
         
-        This is useful for force field parameterization.
+    #     This is useful for force field parameterization.
         
-        Returns:
-            Atom-mapped SMILES string
-        """
-        mol = Chem.MolFromSmiles(self._generate_polymer_smiles())
-        if mol is None:
-            return ""
+    #     Returns:
+    #         Atom-mapped SMILES string
+    #     """
+    #     mol = Chem.MolFromSmiles(self._generate_polymer_smiles())
+    #     if mol is None:
+    #         return ""
             
-        # Add atom mapping
-        for i, atom in enumerate(mol.GetAtoms()):
-            atom.SetAtomMapNum(i + 1)
+    #     # Add atom mapping
+    #     for i, atom in enumerate(mol.GetAtoms()):
+    #         atom.SetAtomMapNum(i + 1)
             
-        return Chem.MolToSmiles(mol)
+    #     return Chem.MolToSmiles(mol)
 
 
 class PEOBuilder(PolymerChainBuilder):

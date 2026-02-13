@@ -16,7 +16,7 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from byteff2.toolkit.polymer_protocol import PolymerElectrolyteProtocol, PolymerTransportProtocol
+from byteff2.toolkit.polymer_protocol import PolymerElectrolyteProtocol, PolymerTransportProtocol, PolymerDensityProtocol
 # from byteff2.toolkit.polymer_simulation import PolymerTransportProtocol
 from byteff2.toolkit.config_schemas import get_example_config, validate_config
 
@@ -26,7 +26,7 @@ def main():
         description='Run polymer electrolyte MD simulations with ByteFF2'
     )
     parser.add_argument(
-        'config',
+        '--config',
         nargs='?',
         help='Path to JSON configuration file'
     )
@@ -49,6 +49,11 @@ def main():
         '--dry-run',
         action='store_true',
         help='Print configuration without running simulation'
+    )
+    parser.add_argument(
+        '--skip-post-process',
+        action='store_true',
+        help='Skip post-processing step'
     )
     
     args = parser.parse_args()
@@ -99,6 +104,11 @@ def main():
             output_dir=config['output_dir'],
             params_dir=config['params_dir']
         )
+    elif 'Density' in protocol_name:
+        protocol = PolymerDensityProtocol(
+            output_dir=config['output_dir'],
+            params_dir=config['params_dir']
+        )
     else:
         protocol = PolymerElectrolyteProtocol(
             output_dir=config['output_dir'],
@@ -112,13 +122,18 @@ def main():
     print(f"\nStarting {protocol_name} simulation...")
     print(f"Temperature: {config['temperature']} K")
     print(f"Components: {list(config['components'].keys())}")
-    
-    # Debug: print polymer components
-    print(f"Polymer components parsed: {list(protocol.polymer_components.keys())}")
+    print(f"Polymer components: {list(protocol.polymer_components.keys())}")
     
     try:
-        protocol.run_full_workflow()
+        # Run protocol (same method name as liquid electrolytes)
+        protocol.run_protocol()
+        
+        # Post-process (unless skipped)
+        if not args.skip_post_process:
+            protocol.post_process()
+        
         print("\nSimulation completed successfully!")
+        
     except Exception as e:
         print(f"\nSimulation failed with error: {e}")
         raise
