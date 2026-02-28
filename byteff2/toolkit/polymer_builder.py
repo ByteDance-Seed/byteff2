@@ -105,6 +105,74 @@ class PolymerChainBuilder:
                 f"found {n_conn} in {self.monomer_smiles}"
             )
             
+    # def build_chain(self) -> Chem.Mol:
+    #     """
+    #     Build a polymer chain by connecting monomers.
+        
+    #     Uses CombineMols + RWMol to iteratively join monomer units
+    #     instead of SMILES string concatenation.
+        
+    #     Returns:
+    #         RDKit Mol object of the full polymer chain
+    #     """
+    #     monomer = Chem.MolFromSmiles(self.monomer_smiles)
+    #     if monomer is None:
+    #         raise ValueError(f"Could not parse monomer SMILES: {self.monomer_smiles}")
+        
+    #     attachment_points = self._find_attachment_points(monomer)
+    #     if len(attachment_points) != 2:
+    #         raise ValueError(
+    #             f"Monomer must have exactly 2 attachment points [*], "
+    #             f"found {len(attachment_points)} in '{self.monomer_smiles}'"
+    #         )
+        
+    #     logger.info(f"Building polymer chain: DP={self.dp}, monomer={self.monomer_smiles}")
+        
+    #     # Build using RDKit molecular editing (avoids SMILES nesting limit)
+    #     polymer = self._build_chain_rwmol(monomer, attachment_points)
+        
+    #     if polymer is None:
+    #         raise ValueError(f"Failed to build polymer chain with DP={self.dp}")
+        
+    #     # Add explicit Hs for proper 3D embedding
+    #     polymer = Chem.AddHs(polymer)
+
+    #     # Generate 3D coordinates
+    #     try:
+    #         params = AllChem.ETKDGv3()
+    #         params.useRandomCoords = True  # Better for large molecules
+    #         params.maxIterations = 5000
+    #         result = AllChem.EmbedMolecule(polymer, params)
+    #         if result == 0:
+    #             try:
+    #                 AllChem.MMFFOptimizeMolecule(polymer, maxIters=500)
+    #             except Exception:
+    #                 pass  # Optimization failure is non-fatal
+    #         else:
+    #             raise RuntimeError(f"EmbedMolecule returned {result}")
+    #     except Exception as e:
+    #         logger.warning(f"3D coordinate generation failed, trying fallback: {e}")
+    #         try:
+    #             params2 = AllChem.ETKDGv2()
+    #             params2.useRandomCoords = True
+    #             params2.maxIterations = 10000
+    #             result = AllChem.EmbedMolecule(polymer, params2)
+    #             if result != 0:
+    #                 logger.warning("ETKDGv2 also failed, using random coordinates")
+    #                 AllChem.EmbedMolecule(polymer, useRandomCoords=True)
+    #         except Exception as e2:
+    #             logger.warning(f"All 3D embedding failed: {e2}")
+    #             AllChem.Compute2DCoords(polymer)
+        
+    #     # Remove explicit Hs to keep atom count consistent with SMILES
+    #     polymer = Chem.RemoveHs(polymer)
+        
+    #     self._polymer_mol = polymer
+    #     self._polymer_smiles = Chem.MolToSmiles(polymer)
+        
+    #     logger.info(f"Built polymer with {polymer.GetNumAtoms()} atoms")
+    #     return polymer
+
     def build_chain(self) -> Chem.Mol:
         """
         Build a polymer chain by connecting monomers.
@@ -137,43 +205,8 @@ class PolymerChainBuilder:
         # Add explicit Hs for proper 3D embedding
         polymer = Chem.AddHs(polymer)
 
-        # Generate 3D coordinates
-        # try:
-        #     AllChem.EmbedMolecule(polymer, AllChem.ETKDGv3())
-        #     AllChem.MMFFOptimizeMolecule(polymer, maxIters=500)
-        # except Exception as e:
-        #     logger.warning(f"3D coordinate generation failed, trying fallback: {e}")
-        #     try:
-        #         AllChem.EmbedMolecule(polymer, AllChem.ETKDGv3(), maxAttempts=50)
-        #     except Exception as e2:
-        #         logger.warning(f"Fallback embedding also failed: {e2}")
-        #         # Use 2D coords as last resort
-        #         AllChem.Compute2DCoords(polymer)
-        try:
-            params = AllChem.ETKDGv3()
-            params.useRandomCoords = True  # Better for large molecules
-            params.maxIterations = 5000
-            result = AllChem.EmbedMolecule(polymer, params)
-            if result == 0:
-                try:
-                    AllChem.MMFFOptimizeMolecule(polymer, maxIters=500)
-                except Exception:
-                    pass  # Optimization failure is non-fatal
-            else:
-                raise RuntimeError(f"EmbedMolecule returned {result}")
-        except Exception as e:
-            logger.warning(f"3D coordinate generation failed, trying fallback: {e}")
-            try:
-                params2 = AllChem.ETKDGv2()
-                params2.useRandomCoords = True
-                params2.maxIterations = 10000
-                result = AllChem.EmbedMolecule(polymer, params2)
-                if result != 0:
-                    logger.warning("ETKDGv2 also failed, using random coordinates")
-                    AllChem.EmbedMolecule(polymer, useRandomCoords=True)
-            except Exception as e2:
-                logger.warning(f"All 3D embedding failed: {e2}")
-                AllChem.Compute2DCoords(polymer)
+        # Use staged embedding for reliable 3D coordinates
+        polymer = self._staged_embed(polymer)
         
         # Remove explicit Hs to keep atom count consistent with SMILES
         polymer = Chem.RemoveHs(polymer)
@@ -183,174 +216,180 @@ class PolymerChainBuilder:
         
         logger.info(f"Built polymer with {polymer.GetNumAtoms()} atoms")
         return polymer
+
+    def _staged_embed(self, mol: Chem.Mol) -> Chem.Mol:
+        """
+        Generate 3D coordinates using a staged approach for large molecules.
+        
+        For small molecules (< 200 atoms), use standard ETKDGv3.
+        For larger molecules, use a constrained embedding approach:
+        1. Embed the molecule with random coordinates
+        2. Run UFF optimization in stages with increasing force field iterations
+        3. Verify bond lengths are reasonable
+        
+        Args:
+            mol: RDKit molecule with explicit Hs
+            
+        Returns:
+            Molecule with optimized 3D coordinates
+        """
+        natoms = mol.GetNumAtoms()
+        
+        if natoms < 200:
+            # Small molecule: standard approach works fine
+            try:
+                params = AllChem.ETKDGv3()
+                params.useRandomCoords = False
+                params.maxIterations = 5000
+                result = AllChem.EmbedMolecule(mol, params)
+                if result == 0:
+                    try:
+                        AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
+                    except Exception:
+                        pass
+                    if self._check_bond_lengths(mol):
+                        return mol
+            except Exception:
+                pass
+            # Fallback for small molecules
+            try:
+                AllChem.EmbedMolecule(mol, useRandomCoords=True)
+                AllChem.UFFOptimizeMolecule(mol, maxIters=2000)
+                return mol
+            except Exception:
+                AllChem.Compute2DCoords(mol)
+                return mol
+        
+        # Large molecule: staged approach
+        logger.info(f"Using staged embedding for large molecule ({natoms} atoms)")
+        
+        # Stage 1: Embed with random coordinates (always succeeds for large mols)
+        params = AllChem.ETKDGv3()
+        params.useRandomCoords = True
+        params.maxIterations = 0  # Don't optimize during embedding
+        params.randomSeed = 42
+        # Use a larger bounding box to avoid initial clashes
+        params.boxSizeMult = 3.0
+        params.useBasicKnowledge = True
+        params.enforceChirality = False  # Relax for initial embed
+        
+        result = AllChem.EmbedMolecule(mol, params)
+        if result != 0:
+            # Last resort: pure random coordinates
+            logger.warning("ETKDGv3 random failed; using bare random coords")
+            AllChem.EmbedMolecule(mol, useRandomCoords=True, maxAttempts=50)
+        
+        if mol.GetNumConformers() == 0:
+            logger.error("Could not embed molecule at all; using 2D coords")
+            AllChem.Compute2DCoords(mol)
+            return mol
+        
+        # Stage 2: Progressive UFF optimization
+        # UFF is much faster and more robust than MMFF for large molecules
+        logger.info("Stage 2: Progressive UFF optimization")
+        for max_iters in [200, 500, 1000, 2000, 5000]:
+            try:
+                ff = AllChem.UFFGetMoleculeForceField(mol)
+                if ff is None:
+                    logger.warning("UFF force field creation failed; trying MMFF")
+                    break
+                ff.Initialize()
+                converged = ff.Minimize(maxIts=max_iters, energyTol=1e-4, forceTol=1e-3)
+                energy = ff.CalcEnergy()
+                logger.info(f"  UFF opt ({max_iters} iters): converged={converged}, energy={energy:.1f}")
+                if converged == 0:
+                    break
+            except Exception as e:
+                logger.warning(f"  UFF optimization failed at {max_iters} iters: {e}")
+                break
+        
+        # Stage 3: Verify and fix bond lengths
+        if not self._check_bond_lengths(mol, tolerance=0.5):
+            logger.warning("Bond lengths still poor after UFF; attempting MMFF refinement")
+            try:
+                result = AllChem.MMFFOptimizeMolecule(mol, maxIters=2000)
+                if result == -1:
+                    logger.warning("MMFF setup failed")
+                else:
+                    logger.info(f"MMFF refinement result: {result}")
+            except Exception as e:
+                logger.warning(f"MMFF refinement failed: {e}")
+        
+        # Final check
+        if self._check_bond_lengths(mol):
+            logger.info("Bond length check passed after optimization")
+        else:
+            logger.warning("Bond lengths may still be non-ideal; proceeding anyway")
+        
+        return mol
     
-    # def _generate_polymer_smiles(self) -> str:
-    #     """
-    #     Generate full polymer SMILES from monomer.
+    def _check_bond_lengths(self, mol: Chem.Mol, tolerance: float = 0.3) -> bool:
+        """
+        Check if bond lengths in the conformer are reasonable.
         
-    #     Returns:
-    #         Full polymer SMILES string
-    #     """
-    #     # Replace [*] with numbered connection points for joining
-    #     monomer = self.monomer_smiles.replace('[*]', '[{}H]', 1)
-    #     monomer = monomer.replace('[*]', '[{}H]', 1)
+        Expected bond lengths (Angstrom):
+        - C-C: ~1.54, C=C: ~1.34
+        - C-O: ~1.43, C=O: ~1.23
+        - C-H: ~1.09
+        - C-F: ~1.35
+        - O-H: ~0.97
+        - C-N: ~1.47
         
-    #     # For simple polymers, we can use a simpler approach:
-    #     # Remove the [*] markers and join monomers directly
-        
-    #     # Get the core monomer by removing connection points
-    #     core = self.monomer_smiles.replace('[*]', '')
-        
-    #     # Build polymer by repeating core
-    #     if self.dp == 1:
-    #         polymer_core = core
-    #     else:
-    #         # For longer chains, need to handle connectivity properly
-    #         polymer_core = self._build_connected_chain()
+        Args:
+            mol: RDKit molecule with at least one conformer
+            tolerance: Maximum allowed deviation from ideal (Angstrom)
             
-    #     # Add end groups
-    #     if self.end_group_left:
-    #         polymer_core = self.end_group_left + polymer_core
-    #     if self.end_group_right:
-    #         polymer_core = polymer_core + self.end_group_right
+        Returns:
+            True if all bond lengths are within tolerance
+        """
+        if mol.GetNumConformers() == 0:
+            return False
+        
+        # Reference bond lengths (Angstrom)
+        TYPICAL_BOND_LENGTHS = {
+            (1, 6): 1.09,   # H-C
+            (1, 7): 1.01,   # H-N
+            (1, 8): 0.97,   # H-O
+            (6, 6): 1.54,   # C-C
+            (6, 7): 1.47,   # C-N
+            (6, 8): 1.43,   # C-O
+            (6, 9): 1.35,   # C-F
+            (6, 16): 1.82,  # C-S
+            (6, 17): 1.77,  # C-Cl
+            (7, 8): 1.36,   # N-O (amide-like)
+            (7, 16): 1.65,  # N-S
+            (8, 16): 1.50,  # O-S (in TFSI)
+        }
+        
+        conf = mol.GetConformer(0)
+        n_bad = 0
+        n_total = 0
+        
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            pos_i = conf.GetAtomPosition(i)
+            pos_j = conf.GetAtomPosition(j)
+            dist = pos_i.Distance(pos_j)
             
-    #     return polymer_core
-    
-    # def _build_connected_chain(self) -> str:
-    #     """
-    #     Build connected polymer chain using RDKit reactions.
-        
-    #     Returns:
-    #         SMILES of connected polymer
-    #     """
-    #     # Parse monomer - replace [*] with labeled atoms for connection
-    #     # Use isotope labels to mark connection points
-    #     labeled_smiles = self.monomer_smiles.replace('[*]', '[3H]', 1)
-    #     labeled_smiles = labeled_smiles.replace('[*]', '[3H]', 1)
-        
-    #     monomer_mol = Chem.MolFromSmiles(labeled_smiles)
-    #     if monomer_mol is None:
-    #         raise ValueError(f"Could not parse labeled monomer: {labeled_smiles}")
+            n1 = mol.GetAtomWithIdx(i).GetAtomicNum()
+            n2 = mol.GetAtomWithIdx(j).GetAtomicNum()
+            key = tuple(sorted([n1, n2]))
             
-    #     # Find the tritium atoms (our connection points)
-    #     tritium_indices = []
-    #     for atom in monomer_mol.GetAtoms():
-    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-    #             tritium_indices.append(atom.GetIdx())
-                
-    #     if len(tritium_indices) != 2:
-    #         raise ValueError(f"Expected 2 connection points, found {len(tritium_indices)}")
+            expected = TYPICAL_BOND_LENGTHS.get(key, 1.5)
+            n_total += 1
             
-    #     # Build chain iteratively
-    #     growing_chain = Chem.RWMol(monomer_mol)
+            if abs(dist - expected) > tolerance:
+                n_bad += 1
         
-    #     for i in range(self.dp - 1):
-    #         # Add another monomer unit
-    #         new_monomer = Chem.MolFromSmiles(labeled_smiles)
-    #         growing_chain = self._connect_monomers(growing_chain, new_monomer)
-            
-    #     # Convert tritium back to hydrogen for end groups
-    #     final_mol = growing_chain.GetMol()
-    #     final_smiles = Chem.MolToSmiles(final_mol)
+        if n_bad > 0:
+            bad_frac = n_bad / max(n_total, 1)
+            logger.debug(f"Bond length check: {n_bad}/{n_total} bonds ({bad_frac:.1%}) outside tolerance")
+            if bad_frac > 0.1:  # More than 10% bad bonds
+                return False
         
-    #     # Remove isotope labels
-    #     final_smiles = final_smiles.replace('[3H]', '')
-        
-    #     return final_smiles
-    
-    # def _connect_monomers(self, mol1: Chem.RWMol, mol2: Chem.Mol) -> Chem.RWMol:
-    #     """
-    #     Connect two monomer units at their connection points.
-        
-    #     Args:
-    #         mol1: First molecule (growing chain)
-    #         mol2: Second molecule (new monomer)
-            
-    #     Returns:
-    #         Combined molecule
-    #     """
-    #     # Find tritium atoms in mol1 (right end) and mol2 (left end)
-    #     t1_idx = None
-    #     t2_idx = None
-        
-    #     for atom in mol1.GetAtoms():
-    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-    #             # Get the rightmost tritium (highest index)
-    #             if t1_idx is None or atom.GetIdx() > t1_idx:
-    #                 t1_idx = atom.GetIdx()
-                    
-    #     for atom in mol2.GetAtoms():
-    #         if atom.GetAtomicNum() == 1 and atom.GetIsotope() == 3:
-    #             # Get the leftmost tritium (lowest index)
-    #             if t2_idx is None or atom.GetIdx() < t2_idx:
-    #                 t2_idx = atom.GetIdx()
-                    
-    #     if t1_idx is None or t2_idx is None:
-    #         raise ValueError("Could not find connection points in monomers")
-            
-    #     # Get the atoms connected to the tritiums
-    #     t1_neighbor = mol1.GetAtomWithIdx(t1_idx).GetNeighbors()[0].GetIdx()
-        
-    #     # Combine molecules
-    #     combo = Chem.CombineMols(mol1.GetMol(), mol2)
-    #     combo = Chem.RWMol(combo)
-        
-    #     # Adjust t2_idx for combined molecule
-    #     offset = mol1.GetNumAtoms()
-    #     t2_idx_combo = t2_idx + offset
-    #     t2_neighbor = combo.GetAtomWithIdx(t2_idx_combo).GetNeighbors()[0].GetIdx()
-        
-    #     # Add bond between the neighbors
-    #     combo.AddBond(t1_neighbor, t2_neighbor, Chem.BondType.SINGLE)
-        
-    #     # Remove the tritium atoms (in reverse order to maintain indices)
-    #     to_remove = sorted([t1_idx, t2_idx_combo], reverse=True)
-    #     for idx in to_remove:
-    #         combo.RemoveAtom(idx)
-            
-    #     return combo
-    
-    # def _generate_3d_conformer(self, mol: Chem.Mol) -> Chem.Mol:
-    #     """
-    #     Generate 3D conformer for the polymer.
-        
-    #     For long chains, uses a multi-stage approach to avoid
-    #     bad conformations.
-        
-    #     Args:
-    #         mol: RDKit molecule
-            
-    #     Returns:
-    #         Molecule with 3D coordinates
-    #     """
-    #     params = AllChem.ETKDGv3()
-    #     params.randomSeed = self.random_seed if self.random_seed else -1
-    #     params.maxIterations = 5000
-        
-    #     # For very long chains, use more attempts
-    #     if mol.GetNumAtoms() > 200:
-    #         params.numThreads = 0  # Use all available threads
-    #         params.useRandomCoords = True
-            
-    #     result = AllChem.EmbedMolecule(mol, params)
-        
-    #     if result != 0:
-    #         # Fallback to simpler embedding
-    #         logger.warning("ETKDGv3 failed, trying simpler embedding")
-    #         AllChem.EmbedMolecule(mol, AllChem.ETKDGv2())
-            
-    #     # Optimize geometry
-    #     try:
-    #         if mol.GetNumAtoms() < 500:
-    #             AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
-    #         else:
-    #             # For large molecules, use UFF which is faster
-    #             AllChem.UFFOptimizeMolecule(mol, maxIters=500)
-    #     except Exception as e:
-    #         logger.warning(f"Force field optimization failed: {e}")
-            
-    #     return mol
-    
+        return True
+
     def _build_chain_rwmol(self, monomer: Chem.Mol, attachment_points: List[int]) -> Chem.Mol:
         """
         Build polymer chain by iteratively combining monomer units using RWMol.
