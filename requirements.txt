@@ -12,6 +12,7 @@ GitPython~=3.1.45
 torch-geometric==2.6.1
 Sella==2.3.5
 pytest-xdist~=3.5
+scipy~=1.12
 
 isort~=6.0.1
 pylint~=3.3.8

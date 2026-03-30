@@ -162,14 +162,15 @@ def rescale_box(
 
 
 def nvt_run(
-        top: GromacsTopFile,
-        system: omm.System,
-        positions: list[omm.Vec3],
-        box_vec: Optional[omm.Vec3],
-        temperature: float,
-        work_dir: str,
-        nvt_steps: int,
-        timestep: int = 2  # fs
+    top: GromacsTopFile,
+    system: omm.System,
+    positions: list[omm.Vec3],
+    box_vec: Optional[omm.Vec3],
+    temperature: float,
+    work_dir: str,
+    nvt_steps: int,
+    timestep: int = 2,  # fs
+    extra_reporters: list | None = None,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
@@ -201,13 +202,16 @@ def nvt_run(
         reportInterval=500,
         enforcePeriodicBox=False,
     )
+    reporters = [state_reporter, dcd_reporter]
+    if extra_reporters:
+        reporters.extend(extra_reporters)
     return openmm_run(
         task_name='nvt',
         top=top,
         system=system,
         positions=positions,
         integrator=integrator,
-        reporter=[state_reporter, dcd_reporter],
+        reporter=reporters,
         work_dir=work_dir,
         minimize=False,
         box_vec=box_vec,
@@ -233,3 +237,111 @@ def dcd_read(fp):
             position.append(frame.xyz.copy())
     position = np.array(position)
     return position
+
+
+class DipoleReporter:
+    """
+    Reporter for recording the total dipole moment of a system using the AMOEBA force field.
+    This version considers only permanent charges (monopoles) and induced dipoles.
+    
+    Units:
+    - Time: ps
+    - Dipole components and magnitude: e*Angstrom
+    """
+
+    def __init__(self, file_path, reportInterval, system):
+        """
+        Initialize the reporter.
+        
+        Parameters
+        ----------
+        file_path : str
+            Path to the output CSV file.
+        reportInterval : int
+            The interval (in steps) at which to write to the file.
+        system : openmm.System
+            The OpenMM System object to extract force and charge information.
+        """
+        self._reportInterval = int(reportInterval)
+        self._file_path = file_path
+
+        # 1. Locate the AmoebaMultipoleForce
+        self._amoeba_force = None
+        for i in range(system.getNumForces()):
+            f = system.getForce(i)
+            if isinstance(f, omm.AmoebaMultipoleForce):
+                self._amoeba_force = f
+                break
+
+        if self._amoeba_force is None:
+            raise RuntimeError("AmoebaMultipoleForce not found in the System.")
+
+        # 2. Pre-extract permanent charges (monopoles)
+        n_particles = system.getNumParticles()
+        self._charges = np.zeros(n_particles)
+        for i in range(n_particles):
+            # params[0] is the charge q in units of elementary_charge
+            params = self._amoeba_force.getMultipoleParameters(i)
+            self._charges[i] = params[0].value_in_unit(ou.elementary_charge)
+
+        # 3. Initialize the output file and write the header
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        self._out = open(file_path, 'w')
+        self._out.write('time_ps,Mx_eA,My_eA,Mz_eA,M_mag_eA\n')
+        self._out.flush()
+
+    def describeNextReport(self, simulation):
+        """
+        Describe the requirements for the next report.
+        periodic=False is crucial: it requests unwrapped coordinates where 
+        molecules are kept whole across periodic boundaries.
+        """
+        steps = self._reportInterval - simulation.currentStep % self._reportInterval
+        return {'steps': steps, 'periodic': False, 'include': ['positions']}
+
+    def report(self, simulation, state):
+        """
+        Calculate and record the dipole moment for the current state.
+        """
+        # 1. Get simulation time in ps
+        t_ps = state.getTime().value_in_unit(ou.picoseconds)
+
+        # 2. Get unwrapped positions in Angstroms
+        # Because periodic=False, molecules are not torn by PBC
+        pos = state.getPositions(asNumpy=True).value_in_unit(ou.angstrom)
+
+        # 3. Calculate Monopole Contribution: sum(q_i * r_i)
+        # Result in e * Angstrom
+        m_monopole = np.sum(self._charges[:, np.newaxis] * pos, axis=0)
+
+        # 4. Get Induced Dipoles from AMOEBA
+        try:
+            mu_ind_list = self._amoeba_force.getInducedDipoles(simulation.context)
+        except omm.OpenMMException:
+            # Re-initialize force reference if the Context has been updated/rebuilt
+            self._reinit_force(simulation.system)
+            mu_ind_list = self._amoeba_force.getInducedDipoles(simulation.context)
+
+        # 5. Convert induced dipoles from e*nm to e*A and sum them up
+        m_induced = np.array(mu_ind_list).sum(axis=0) * 10
+
+        # 6. Total Dipole Vector
+        m_total = m_monopole + m_induced
+        m_mag = np.linalg.norm(m_total)
+
+        # 7. Write to CSV file
+        self._out.write(f"{t_ps:.4f},{m_total[0]:.6f},{m_total[1]:.6f},{m_total[2]:.6f},{m_mag:.6f}\n")
+        self._out.flush()
+
+    def _reinit_force(self, system):
+        """Re-locate the AmoebaMultipoleForce instance in the System."""
+        for i in range(system.getNumForces()):
+            f = system.getForce(i)
+            if isinstance(f, omm.AmoebaMultipoleForce):
+                self._amoeba_force = f
+                break
+
+    def __del__(self):
+        """Ensure the file is closed properly."""
+        if hasattr(self, '_out'):
+            self._out.close()
