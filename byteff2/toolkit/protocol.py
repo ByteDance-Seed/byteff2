@@ -748,15 +748,12 @@ class CompressibilityProtocol(Protocol):
         # Read dipole series and thermodynamic quantities
         csv_file = os.path.join(self.output_dir, 'npt_state.csv')
         volume_m3 = pd.read_csv(csv_file)["Box Volume (nm^3)"].to_numpy() * 1e-27
-        md_volume_A3, _ = volume_calc(self.output_dir)
         skip_steps = 1000  # skip first 1 ns
         comp = compressibility(volume_m3[skip_steps:], self.config['temperature'])
         result = {
             'compressibility': float(comp),
-            'volume': float(md_volume_A3),
             'units': {
                 'compressibility': 'GPa^-1',
-                'volume': 'Angstrom^3'
             },
         }
         with open(os.path.join(self.output_dir, 'compressibility_results.json'), 'w') as f:
