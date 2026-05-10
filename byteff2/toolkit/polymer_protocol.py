@@ -2399,7 +2399,8 @@ class PolymerDensityProtocol(PolymerElectrolyteProtocol, DensityProtocol):
         npt_timestep_fs = int(self.config.get('npt_timestep_fs', 2))
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
-        
+        traj_interval = int(self.config.get('traj_interval', 500))
+
         npt_run(
             top=input_top,
             system=input_system,
@@ -2414,6 +2415,7 @@ class PolymerDensityProtocol(PolymerElectrolyteProtocol, DensityProtocol):
             dcd_path_override=self.config.get('npt_dcd'),
             resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)),
             resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)),
+            traj_interval=traj_interval,
         )
         
         logger.info('Finished running polymer density protocol')
@@ -2609,6 +2611,7 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
         
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
+        traj_interval = int(self.config.get('traj_interval', 500))
         compute_viscosity = bool(self.config.get('compute_viscosity', True))
         
         # Determine starting stage
@@ -2648,8 +2651,9 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
                 dcd_path_override=self.config.get('npt_dcd'),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)),
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)),
+                traj_interval=traj_interval,
             )
-            
+
             # Rescale box
             npt_csv_override = self.config.get('npt_state_csv')
             rescale_positions, rescale_box_vec = rescale_box(
@@ -2658,7 +2662,7 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
                 work_dir=self.output_dir,
                 csv_override=npt_csv_override,
             )
-            
+
             logger.info('NVT run')
             nvt_positions, nvt_box_vec = nvt_run(
                 input_top,
@@ -2675,21 +2679,22 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
                 dcd_path_override=self.config.get('nvt_dcd'),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)),
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)),
+                traj_interval=traj_interval,
             )
-            
+
         elif start_from == 'nvt':
             # Load NPT state for box rescaling
             npt_csv_override = self.config.get('npt_state_csv')
             npt_csv_path = npt_csv_override or os.path.join(self.output_dir, 'npt_state.csv')
             if os.path.isfile(npt_csv_path):
                 nvt_seed_pos, nvt_seed_box = rescale_box(
-                    input_positions, unit_cell, 
+                    input_positions, unit_cell,
                     work_dir=self.output_dir, csv_override=npt_csv_override
                 )
             else:
                 nvt_seed_pos, nvt_seed_box = input_positions, unit_cell
                 logger.info('NPT state not found; using GRO positions/box for NVT')
-            
+
             nvt_positions, nvt_box_vec = nvt_run(
                 input_top,
                 input_system,
@@ -2705,6 +2710,7 @@ class PolymerTransportProtocol(PolymerElectrolyteProtocol, TransportProtocol):
                 dcd_path_override=self.config.get('nvt_dcd'),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)),
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)),
+                traj_interval=traj_interval,
             )
             
         else:  # start_from == 'nonequ'
