@@ -234,6 +234,7 @@ packages.dot
 # poetry
 .env
 .venv
+.claude
 
 # debug
 debug.ipynb
