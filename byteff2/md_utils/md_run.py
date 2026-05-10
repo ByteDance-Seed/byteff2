@@ -469,6 +469,7 @@ def npt_run(
     dcd_path_override: Optional[str] = None,
     resume_safe_backoff_frames: int = 2,
     resume_safe_minimize: bool = True,
+    traj_interval: int = 500,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
@@ -482,7 +483,7 @@ def npt_run(
     append_logs = bool(resume and os.path.isfile(os.path.join(work_dir, 'npt.chk')))
     state_reporter = app.StateDataReporter(
         file='npt_state.csv',
-        reportInterval=500,
+        reportInterval=traj_interval,
         step=True,
         time=True,
         potentialEnergy=True,
@@ -504,14 +505,14 @@ def npt_run(
     try:
         dcd_reporter = app.DCDReporter(
             dcd_path,
-            reportInterval=500,
+            reportInterval=traj_interval,
             enforcePeriodicBox=False,
             append=append_logs,
         )
     except TypeError:
         dcd_reporter = app.DCDReporter(
             dcd_path,
-            reportInterval=500,
+            reportInterval=traj_interval,
             enforcePeriodicBox=False,
         )
     reporters = [state_reporter, dcd_reporter]
@@ -630,6 +631,7 @@ def nvt_run(
         dcd_path_override: Optional[str] = None,
         resume_safe_backoff_frames: int = 2,
         resume_safe_minimize: bool = True,
+        traj_interval: int = 500,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
@@ -639,7 +641,7 @@ def nvt_run(
     append_logs = bool(resume and os.path.isfile(os.path.join(work_dir, 'nvt.chk')))
     state_reporter = app.StateDataReporter(
         file='nvt_state.csv',
-        reportInterval=500,
+        reportInterval=traj_interval,
         step=True,
         time=True,
         potentialEnergy=True,
@@ -661,14 +663,14 @@ def nvt_run(
     try:
         dcd_reporter = app.DCDReporter(
             dcd_path,
-            reportInterval=500,
+            reportInterval=traj_interval,
             enforcePeriodicBox=False,
             append=append_logs,
         )
     except TypeError:
         dcd_reporter = app.DCDReporter(
             dcd_path,
-            reportInterval=500,
+            reportInterval=traj_interval,
             enforcePeriodicBox=False,
         )
     reporters = [state_reporter, dcd_reporter]

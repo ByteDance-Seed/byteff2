@@ -693,6 +693,7 @@ class DensityProtocol(Protocol):
         npt_timestep_fs = int(self.config.get('npt_timestep_fs', 2)) if isinstance(self.config, dict) else 2
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
+        traj_interval = int(self.config.get('traj_interval', 500)) if isinstance(self.config, dict) else 500
         npt_run(
             top=input_top,
             system=input_system,
@@ -707,6 +708,7 @@ class DensityProtocol(Protocol):
             dcd_path_override=(self.config.get('npt_dcd') if isinstance(self.config, dict) else None),
             resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
             resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+            traj_interval=traj_interval,
         )
         logger.info('Finished running density protocol')
 
@@ -784,6 +786,7 @@ class TransportProtocol(Protocol):
         )
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
+        traj_interval = int(self.config.get('traj_interval', 500)) if isinstance(self.config, dict) else 500
         # Determine starting stage: honor explicit config, else infer from progress when resuming
         explicit_start = None
         if isinstance(self.config, dict):
@@ -827,6 +830,7 @@ class TransportProtocol(Protocol):
                 dcd_path_override=(self.config.get('npt_dcd') if isinstance(self.config, dict) else None),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+                traj_interval=traj_interval,
             )
             # Allow overriding the NPT CSV location for rescaling
             npt_csv_override = None
@@ -854,6 +858,7 @@ class TransportProtocol(Protocol):
                 dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+                traj_interval=traj_interval,
             )
         elif start_from == 'nvt':
             logger.info('start_from=nvt: skipping NPT and starting/resuming NVT')
@@ -890,6 +895,7 @@ class TransportProtocol(Protocol):
                 dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
                 resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+                traj_interval=traj_interval,
             )
         else:  # start_from == 'nonequ'
             logger.info('start_from=nonequ: loading NVT outputs to seed nonequilibrium run')
@@ -1083,6 +1089,7 @@ class HVapProtocol(Protocol):
         )
         resume = bool(self.config.get('resume', False))
         checkpoint_interval = int(self.config.get('checkpoint_interval', 5000))
+        traj_interval = int(self.config.get('traj_interval', 500)) if isinstance(self.config, dict) else 500
         npt_run(
             top=liq_top,
             system=liq_system,
@@ -1100,6 +1107,7 @@ class HVapProtocol(Protocol):
             resume_safe_warmup_steps=int(self.config.get('resume_safe_warmup_steps', 5000)) if isinstance(self.config, dict) else 5000,
             resume_safe_warmup_step_factor=float(self.config.get('resume_safe_warmup_step_factor', 2.0)) if isinstance(self.config, dict) else 2.0,
             resume_safe_disable_barostat_warmup=bool(self.config.get('resume_safe_disable_barostat_warmup', True)) if isinstance(self.config, dict) else True,
+            traj_interval=traj_interval,
         )
         logger.info('running gas phase')
         grofileparser = app.GromacsGroFile(gas_gro_file)
@@ -1123,7 +1131,8 @@ class HVapProtocol(Protocol):
                 state_csv_override=(self.config.get('nvt_state_csv') if isinstance(self.config, dict) else None),
                 dcd_path_override=(self.config.get('nvt_dcd') if isinstance(self.config, dict) else None),
                 resume_safe_backoff_frames=int(self.config.get('resume_safe_backoff_frames', 2)) if isinstance(self.config, dict) else 2,
-                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True)
+                resume_safe_minimize=bool(self.config.get('resume_safe_minimize', True)) if isinstance(self.config, dict) else True,
+                traj_interval=traj_interval)
 
     def post_process(self,):
         assert len(self.components) == 1
