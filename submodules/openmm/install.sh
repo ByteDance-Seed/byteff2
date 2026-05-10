@@ -32,7 +32,7 @@ rm -rf "${TOP_LEVEL_DIR}/openmm"
 rm -rf "${TOP_LEVEL_DIR}/openmm-velocityVerlet"
 
 # Install openmm
-git clone --branch 8.3.1 --single-branch https://github.com/openmm/openmm.git
+git clone --branch 8.5.1 --single-branch https://github.com/openmm/openmm.git
 cd openmm
 git am ${TOP_LEVEL_DIR}/amoeba_scale_cpu.patch
 git am ${TOP_LEVEL_DIR}/amoeba_scale_cuda.patch

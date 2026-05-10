@@ -3,19 +3,23 @@ import os
 import shutil
 import subprocess
 from enum import Enum
+from typing import OrderedDict
 
 import ase.io as aio
 import numpy as np
 import openmm.app as app
 import openmm.unit as ou
 import pandas as pd
+from numpy.typing import NDArray
+from scipy import signal
 
-from byteff2.md_utils.md_run import dcd_read, npt_run, nvt_run, rescale_box, volume_calc
+from byteff2.md_utils.md_run import DipoleReporter, dcd_read, npt_run, nvt_run, rescale_box, volume_calc
 from byteff2.md_utils.onsager_conductivity import onsager_calc
 from byteff2.md_utils.viscosity import nonequ_run, viscosity_calc
 from byteff2.toolkit.gmxtool import GMXScript
 from byteff2.toolkit.openmmtool import generate_openmm_system
 from byteff2.train.utils import get_nb_params, load_model
+from byteff2.utils.definitions import CHG_FACTOR
 from bytemol.core import Molecule
 from bytemol.toolkit.gmxtool.topparse import RecordAtomType, RecordMolecule, Records, TopoFullSystem
 from bytemol.utils import get_data_file_path, setup_default_logging
@@ -530,6 +534,17 @@ class Protocol:
         for component_name, molar_ratio in components_ratio.items():
             component = load_topo(self.params_dir, component_name)
             component.molar_ratio = molar_ratio
+            components_temp[component_name] = component
+        components_temp = {
+            k: v for k, v in sorted(components_temp.items(), key=lambda item: item[1].molar_ratio, reverse=True)
+        }
+        solvent = [k for k, v in components_temp.items() if v.type == ComponentType.SOLVENT]
+        anion = [k for k, v in components_temp.items() if v.type == ComponentType.ANION]
+        cation = [k for k, v in components_temp.items() if v.type == ComponentType.CATION]
+        component_order = solvent + anion + cation
+        components = OrderedDict()
+        for component_name in component_order:
+            component = components_temp[component_name]
             components[component_name] = component
             for record in component.atp_records.all:
                 if isinstance(record, RecordAtomType):
@@ -598,7 +613,6 @@ class Protocol:
 
         init_density = predict_density(components)
         init_box = predict_box(components, init_density)
-        components = {k: v for k, v in sorted(components.items(), key=lambda item: item[1].molar_num, reverse=True)}
         itp_list = [f'{mol_name}.itp' for mol_name in components.keys()]
         atp_list = [f'{mol_name}.atp' for mol_name in components.keys()]
         mols = [[i] for i in range(len(components))]
@@ -955,13 +969,40 @@ class TransportProtocol(Protocol):
         cfg = getattr(self, 'config', {}) if hasattr(self, 'config') else {}
         compute_viscosity = True if not isinstance(cfg, dict) else bool(cfg.get('compute_viscosity', True))
         compute_conductivity = True if not isinstance(cfg, dict) else bool(cfg.get('compute_conductivity', True))
-
-        results = {}
-        vis = None
         if compute_viscosity:
-            vis = viscosity_calc(self.output_dir)
-            logger.info('viscosity: %.3f cP', vis)
-            results['viscosity'] = vis
+          vis = viscosity_calc(self.output_dir)
+          md_volume, md_temperature = volume_calc(self.output_dir)
+          logger.info('viscosity: %.3f', vis)
+
+          nvt_positions = dcd_read(os.path.join(self.output_dir, 'nvt.dcd'))
+          species_mass_dict, species_number_dict, species_charges_dict = {}, {}, {}
+          for mol_name, topo_mol in self.components.items():
+              species_mass_dict[mol_name] = [atom.mass for atom in topo_mol.atoms]
+              species_number_dict[mol_name] = topo_mol.molar_num
+              species_charges_dict[mol_name] = int(sum([atom.charge for atom in topo_mol.atoms]))
+          species_order = list(self.components.keys())
+
+          results = onsager_calc(
+              species_order,
+              species_mass_dict,
+              species_number_dict,
+              species_charges_dict,
+              md_volume,
+              vis,
+              md_temperature,
+              nvt_positions,
+          )
+          results['viscosity'] = vis
+          results["components"] = species_order
+          with open(os.path.join(self.output_dir, 'results.json'), 'w') as f:
+              json.dump(results, f, indent=2)
+
+#         results = {}
+#         vis = None
+#         if compute_viscosity:
+#             vis = viscosity_calc(self.output_dir)
+#             logger.info('viscosity: %.3f cP', vis)
+#             results['viscosity'] = vis
         else:
             # Optional user-provided viscosity for Yeh–Hummer
             if isinstance(cfg, dict) and cfg.get('viscosity_cP') is not None:
@@ -1174,6 +1215,238 @@ class HVapProtocol(Protocol):
         logger.info(result)
         return result
 
-### TODO: solvation free energy protocol
 
-### TODO: Kirkwood-Buff integral protocol
+class DielectricProtocol(Protocol):
+
+    def __init__(self, config: dict):
+        super().__init__(config['params_dir'], config['output_dir'])
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info('running dielectric protocol')
+        # steps configurable via JSON; defaults provide adequate sampling
+        npt_steps = int(self.config.get('npt_steps', 2000000))
+        nvt_steps = int(self.config.get('nvt_steps', 6000000))
+        dipole_interval = int(self.config.get('dipole_interval', 500))
+        nonbonded_params = self.generate_ff_params(self.config['smiles'])
+        self.components = self.build_system(
+            self.config['natoms'],
+            self.config['components'],
+            self.config['working_dir'],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_openmm_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        logger.info('npt run')
+        npt_positions, npt_box_vec = npt_run(
+            input_top,
+            input_system,
+            input_positions,
+            temperature=self.config['temperature'],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+        rescale_positions, rescale_box_vec = rescale_box(npt_positions, npt_box_vec, work_dir=self.output_dir)
+        logger.info('nvt run with dipole recording')
+        dipole_reporter = DipoleReporter(
+            file_path=os.path.join(self.output_dir, 'dipole.csv'),
+            reportInterval=dipole_interval,
+            system=input_system,
+        )
+        _nvt_positions, _nvt_box_vec = nvt_run(
+            input_top,
+            input_system,
+            rescale_positions,
+            rescale_box_vec,
+            temperature=self.config['temperature'],
+            work_dir=self.output_dir,
+            nvt_steps=nvt_steps,
+            extra_reporters=[dipole_reporter],
+        )
+
+    def post_process(self,):
+
+        def _correlate_1d(in1: NDArray, in2: NDArray, average: bool) -> tuple[NDArray, NDArray]:
+            N = len(in1)
+            assert N == len(in2)
+
+            result = signal.correlate(in1, in2, mode="full", method="auto")
+            c12 = result[N - 1:]
+            c21 = result[::-1][N - 1:]
+            if average:
+                div = np.arange(N, 0, -1)
+                c12 = c12 / div
+                c21 = c21 / div
+                # "c12 /= div; c21 /= div" will not work because result[N-1]
+                # will be divided by div[0]**2 due to the in-place operation.
+            return c12, c21
+
+        def correlate(in1: NDArray, in2: NDArray, average: bool = True) -> tuple[NDArray, NDArray]:
+            shape1 = in1.shape
+            dim1 = len(shape1)
+            assert dim1 in (1, 2)
+            if dim1 == 1:
+                return _correlate_1d(in1, in2, average)
+            assert shape1 == in2.shape
+
+            N, D = shape1
+            c12, c21 = np.zeros(N), np.zeros(N)
+            for i in range(D):
+                c12i, c21i = _correlate_1d(in1[:, i], in2[:, i], average)
+                c12 += c12i
+                c21 += c21i
+            return c12, c21
+
+        def calculate_dipole_autocorrelation(Mx, My, Mz):
+            """Calculate dipole moment autocorrelation function (DACF)"""
+            # Create dipole moment vector
+            dipole = np.vstack([Mx, My, Mz]).T
+
+            # Calculate autocorrelation function
+            dacf, _ = correlate(dipole, dipole, average=True)
+
+            return dacf
+
+        def calculate_correlation_time(dacf, dt):
+            """
+            Calculate correlation time from dipole autocorrelation function.
+            
+            Parameters
+            ----------
+            dacf : np.ndarray
+                Dipole autocorrelation function
+            dt : float
+                Time step between frames (in ps)
+            
+            Returns
+            -------
+            correlation_time : float
+                Correlation time (in ps)
+            """
+            dacf = dacf / dacf[0]
+            under_cutoff = np.where(dacf < 0.05)[0]
+            if len(under_cutoff) == 0:
+                cutoff = len(dacf)
+            else:
+                cutoff = under_cutoff[0]
+
+            # Integrate DACF using trapezoidal rule to get correlation time
+            correlation_time = np.trapz(dacf[:cutoff], dx=dt)
+
+            return correlation_time
+
+        logger.info('post processing dielectric protocol')
+        # Read dipole series and thermodynamic quantities
+        dip_csv = os.path.join(self.output_dir, 'dipole.csv')
+        df = pd.read_csv(dip_csv)
+        md_volume_A3, _ = volume_calc(self.output_dir)
+
+        # use later part of trajectory to avoid initial relaxation bias
+        start_index = int(len(df) * 0.2)
+        Mx = df['Mx_eA'].values[start_index:]
+        My = df['My_eA'].values[start_index:]
+        Mz = df['Mz_eA'].values[start_index:]
+
+        M2_mean = np.mean(Mx**2 + My**2 + Mz**2)
+        M_mean_sq = np.mean(Mx)**2 + np.mean(My)**2 + np.mean(Mz)**2
+        fluct = float(M2_mean - M_mean_sq)
+
+        eps0_star = 1.0 / (4.0 * np.pi * CHG_FACTOR)
+        R_gas = 1.9872036 * 1e-3
+        V = md_volume_A3  # in A^3
+        T = self.config['temperature']  # in K
+
+        dielectric = 1.0 + fluct / (3.0 * eps0_star * V * R_gas * T)
+
+        # Calculate dipole autocorrelation function and correlation time
+        dt = 2.0 * self.config.get('dipole_interval', 500) * 1e-3  # ps (timestep in fs, every N steps)
+        dacf = calculate_dipole_autocorrelation(Mx, My, Mz)
+        correlation_time = calculate_correlation_time(dacf, dt)
+
+        result = {
+            'dielectric': float(dielectric),
+            'volume': float(md_volume_A3),
+            "correlation_time": float(correlation_time),
+            'units': {
+                'dielectric': 'dimensionless',
+                'volume': 'Angstrom^3',
+                'correlation_time': 'ps',
+            },
+        }
+        with open(os.path.join(self.output_dir, 'dielectric_results.json'), 'w') as f:
+            json.dump(result, f, indent=2)
+        logger.info(result)
+        return result
+
+
+class CompressibilityProtocol(Protocol):
+
+    def __init__(self, config: dict):
+        super().__init__(config['params_dir'], config['output_dir'])
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info('running compressibility protocol')
+        # steps configurable via JSON; defaults provide adequate sampling
+        npt_steps = int(self.config.get('npt_steps', 5000000))
+        assert npt_steps > 1000000, "npt_steps must be greater than 1000000"
+        nonbonded_params = self.generate_ff_params(self.config['smiles'])
+        self.components = self.build_system(
+            self.config['natoms'],
+            self.config['components'],
+            self.config['working_dir'],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_openmm_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        logger.info('npt run')
+        _npt_positions, _npt_box_vec = npt_run(
+            input_top,
+            input_system,
+            input_positions,
+            temperature=self.config['temperature'],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+
+    def post_process(self,):
+
+        def compressibility(volume, temp):
+            kb = 1.380649e-23  # J/K
+            v_mean = np.mean(volume)
+            dv2_mean = np.mean((volume - v_mean)**2)
+            comp = dv2_mean / (v_mean * kb * temp) * 1e9  # GPa^-1
+            return comp
+
+        logger.info('post processing compressibility protocol')
+        # Read dipole series and thermodynamic quantities
+        csv_file = os.path.join(self.output_dir, 'npt_state.csv')
+        volume_m3 = pd.read_csv(csv_file)["Box Volume (nm^3)"].to_numpy() * 1e-27
+        skip_steps = 1000  # skip first 1 ns
+        comp = compressibility(volume_m3[skip_steps:], self.config['temperature'])
+        result = {
+            'compressibility': float(comp),
+            'units': {
+                'compressibility': 'GPa^-1',
+            },
+        }
+        with open(os.path.join(self.output_dir, 'compressibility_results.json'), 'w') as f:
+            json.dump(result, f, indent=2)
+        logger.info(result)
+        return result
