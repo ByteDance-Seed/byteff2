@@ -370,6 +370,7 @@ unit = OnsagerUnit()
 
 
 def onsager_calc(
+    species_order,
     species_mass,
     species_number,
     species_charge,

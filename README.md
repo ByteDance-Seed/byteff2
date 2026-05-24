@@ -80,6 +80,97 @@ Success: Installed OpenMM and openmm-velocityVerlet.
 ```
 **My note:** I was having a lot of issues with the installation of their custom `openmm-velocityVerlet` library across MacOS and linux on two different HPCs with different machine configurations and environments. While I finally got `openmm-velocityVerlet` to install using pip, it would throw a segmentation error with the installation. Please note that `openmm-velocityVerlet` is only used for non-equilibrium MD run for viscosity calculations, so if you are interested in getting viscosity of electrolytes, this installation can be skipped. I have made several changes in this codebase to improve functionality and make it as generic as possible.
 
+#### Building `openmm-velocityVerlet` from source (CUDA, fixes segfault)
+
+If `pip install velocityverletplugin` (or a conda build) leads to a segmentation
+fault inside `Context.__init__` when starting the non-equilibrium viscosity
+run, the cause is an ABI mismatch between the prebuilt plugin and the
+ByteFF2-patched OpenMM (which reports a dev version like
+`8.1.2.dev-440a9c7`). Build the plugin from source against the **same** OpenMM
+that lives in your conda environment:
+
+1. **Install build dependencies into the byteff2 env**:
+   ```bash
+   conda activate byteff2
+   conda install -c conda-forge swig doxygen
+   ```
+
+2. **Make a CUDA toolkit available**. On HPC clusters with a module system
+   (e.g. Anvil), CUDA may be hidden behind a GPU module tree:
+   ```bash
+   module load modtree/gpu
+   module load cuda                  # or e.g. cuda/11.7
+   which nvcc                        # must print a path
+   echo $CUDA_HOME                   # must be set
+   ```
+   If your cluster has no CUDA module, install one into the env:
+   ```bash
+   conda install -c conda-forge cuda-toolkit=11.8
+   export CUDA_HOME=$CONDA_PREFIX
+   ```
+
+3. **Clone and configure**. Make sure the conda env is active so the build
+   picks up the patched OpenMM headers at `$CONDA_PREFIX/include/openmm/`:
+   ```bash
+   git clone https://github.com/z-gong/openmm-velocityVerlet.git
+   cd openmm-velocityVerlet
+   mkdir build && cd build
+
+   cmake .. \
+     -DCMAKE_C_COMPILER=$(which gcc) \
+     -DCMAKE_CXX_COMPILER=$(which g++) \
+     -DOPENMM_DIR=$CONDA_PREFIX \
+     -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX \
+     -DCMAKE_BUILD_TYPE=Release \
+     -DPYTHON_EXECUTABLE=$(which python) \
+     -DSWIG_EXECUTABLE=$(which swig) \
+     -DCUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME
+   ```
+   On some clusters CMake picks up a broken `mpicc` from the conda base. If
+   the configure fails with `x86_64-conda-linux-gnu-cc: command not found`,
+   pass an explicit non-MPI compiler via `-DCMAKE_C_COMPILER` /
+   `-DCMAKE_CXX_COMPILER` (e.g. the spack `gcc` at
+   `/apps/spack/anvil/apps/gcc/11.2.0-*/bin/gcc`).
+
+   `FIND_PACKAGE(CUDA QUIET)` in the plugin's CMakeLists prints nothing when
+   it succeeds — don't worry about the absence of a "Found CUDA" line. The
+   real check is step 5 below.
+
+4. **Build and install**:
+   ```bash
+   make -j8
+   make install
+   make PythonInstall
+   ```
+
+5. **Verify the CUDA kernels were built and installed**:
+   ```bash
+   ls build/platforms/             # must contain a non-empty 'cuda' dir
+   ls $CONDA_PREFIX/lib/plugins/ | grep -i velocity
+   # expected: libOpenMMVelocityVerlet.so AND libVelocityVerletPluginCUDA.so
+
+   python -c "
+   import openmm as mm
+   print('Plugin load failures:', mm.Platform.getPluginLoadFailures())
+   print('Platforms:', [mm.Platform.getPlatform(i).getName()
+                        for i in range(mm.Platform.getNumPlatforms())])
+   "
+   ```
+   If `libVelocityVerletPluginCUDA.so` is missing from
+   `$CONDA_PREFIX/lib/plugins/`, copy it manually from
+   `build/platforms/cuda/`.
+
+6. **(Already applied in this fork) `ViscosityReporter` tuple fix.** The
+   upstream reporter's `describeNextReport` returns a dict, which raises
+   `KeyError: 0` inside `openmm/app/simulation.py::_simulate` on this OpenMM
+   build. `byteff2/md_utils/viscosity.py` has been patched to return the
+   6-tuple form `(steps, False, False, False, False, False)`.
+
+If you still hit a segfault, force the CPU platform once to isolate the
+problem (`export BYTEFF2_OPENMM_PLATFORM=CPU`). And run with
+`PYTHONFAULTHANDLER=1 python -X faulthandler ...` so any future C-level
+crash prints a stack trace instead of dying silently.
+
 ### Trained Models
 The model and configuration file are available on HuggingFace [byteff2](https://huggingface.co/ByteDance-Seed/byteff2).
 

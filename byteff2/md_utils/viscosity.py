@@ -11,7 +11,6 @@
 
 # The ViscosityReporter is modified from https://github.com/z-gong/openmm-velocityVerlet/blob/master/examples/ommhelper/reporter/viscosityreporter.py
 
-import copy
 import os
 from typing import Optional
 
@@ -67,7 +66,12 @@ class ViscosityReporter(object):
             positions should be wrapped to lie in a single periodic box.
         """
         steps = self._reportInterval - simulation.currentStep % self._reportInterval
-        return {'steps': steps, 'periodic': False, 'include': []}
+        # Return 6-tuple format: (steps, needPositions, needVelocities,
+        # needForces, needEnergies, periodic). The dict form
+        # {'steps':..., 'periodic':..., 'include':[]} only works on OpenMM
+        # builds that normalize it; OpenMM 8.1.2's _simulate indexes by [0]
+        # and raises KeyError: 0 on a dict.
+        return (steps, False, False, False, False, False)
 
     def report(self, simulation: app.Simulation, state):
         """Generate a report.
@@ -112,8 +116,6 @@ def nonequ_run(
     checkpoint_interval: int = 5000,
     timestep_fs: int = 1,
 ):
-    top = copy.deepcopy(top)
-    system = copy.deepcopy(system)
     from velocityverletplugin import VVIntegrator
     # VVIntegrator supports variable step size; default 1 fs
     timestep = int(timestep_fs)
