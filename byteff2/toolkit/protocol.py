@@ -74,22 +74,14 @@ def predict_density(component: dict):
     return round(sol_density, 2)
 
 
-def search_mixture(mol_ratio, min_atoms, max_atoms, components):
-    result = []
+def search_mixture(mol_ratio, min_atoms, components):
+    # Pick a mixture whose total atom count just exceeds `min_atoms` while
+    # preserving `mol_ratio`.
     num_atoms = np.array([len(component.atoms) for component in components.values()])
-    atoms_ratio = mol_ratio * num_atoms
     uni_mol_ratio = mol_ratio / np.min(mol_ratio)
-    uni_atom_count = int(sum(uni_mol_ratio * num_atoms))
-    min_count = (min_atoms - 1) // uni_atom_count + 1
-    max_count = (max_atoms - 1) // uni_atom_count + 1
-    steps = max((max_count - min_count), 1)
-    for i in range(min_count, max_count, steps):
-        guess = np.round(uni_mol_ratio * i).astype(int)
-        guess_count = int(sum(guess * num_atoms))
-        mix = np.round(guess_count * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
-        result.append(guess_count)
-    total_atoms = result[0]
-    mix = np.round(total_atoms * atoms_ratio / np.sum(atoms_ratio) / num_atoms).astype(int)
+    min_count = int(np.ceil(min_atoms / sum(uni_mol_ratio * num_atoms)))
+    mix = np.round(uni_mol_ratio * min_count).astype(int)
+    total_atoms = int(round(sum(mix * num_atoms)))
     return total_atoms, mix
 
 
@@ -208,7 +200,11 @@ class Protocol:
             shutil.copy(f'{self.params_dir}/{component_name}.itp', f'{working_dir}/{component_name}.itp')
             shutil.copy(f'{self.params_dir}/{component_name}.atp', f'{working_dir}/{component_name}.atp')
             shutil.copy(f'{self.params_dir}/{component_name}.gro', f'{working_dir}/{component_name}.gro')
-        assert int(system_charge) == 0, f"System charge should be 0, but got {system_charge}"
+        rounded_system_charge = round(system_charge)
+        assert abs(system_charge - rounded_system_charge) < 1e-2, (
+            f"System charge should be close to an integer, but got {system_charge}"
+        )
+        assert int(rounded_system_charge) == 0, f"System charge should be 0, but got {system_charge}"
         full_topparse = TopoFullSystem.from_records(full_system_records, sort_idx=False)
         if build_gas:
             assert len(components) == 1, "Gas phase only support one component"
@@ -220,7 +216,7 @@ class Protocol:
             with open(f'{working_dir}/solvent_salt_gas.gro', 'w') as new_gro_f:
                 new_gro_f.writelines(lines)
         input_mol_ratio = np.array(list(c.molar_ratio for c in components.values()))
-        real_total_atoms, mix = search_mixture(input_mol_ratio, total_atoms, total_atoms + 1000, components)
+        real_total_atoms, mix = search_mixture(input_mol_ratio, total_atoms, components)
 
         full_topparse.molecules = []
         box_charge = 0
@@ -228,7 +224,11 @@ class Protocol:
             component.molar_num = mix[idx]
             full_topparse.molecules.append(RecordMolecule.from_text(f"{component.name} {component.molar_num}"))
             box_charge += component.molar_num * component.net_charge
-        assert int(box_charge) == 0, f"Box charge should be 0, but got {box_charge}"
+        rounded_box_charge = round(box_charge)
+        assert abs(box_charge - rounded_box_charge) < 1e-2, (
+            f"Box charge should be close to an integer, but got {box_charge}"
+        )
+        assert int(rounded_box_charge) == 0, f"Box charge should be 0, but got {box_charge}"
 
         init_density = predict_density(components)
         init_box = predict_box(components, init_density)
@@ -404,7 +404,12 @@ class TransportProtocol(Protocol):
         for mol_name, topo_mol in self.components.items():
             species_mass_dict[mol_name] = [atom.mass for atom in topo_mol.atoms]
             species_number_dict[mol_name] = topo_mol.molar_num
-            species_charges_dict[mol_name] = int(sum([atom.charge for atom in topo_mol.atoms]))
+            tot_charge = sum([atom.charge for atom in topo_mol.atoms])
+            rounded_tot_charge = round(tot_charge)
+            assert abs(tot_charge - rounded_tot_charge) < 1e-2, (
+                f"Charge of {mol_name} should be close to an integer, but got {tot_charge}"
+            )
+            species_charges_dict[mol_name] = int(rounded_tot_charge)
         species_order = list(self.components.keys())
 
         results = onsager_calc(

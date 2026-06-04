@@ -133,14 +133,13 @@ If you find ByteFF-Pol or ByteFF is useful for your research and applications, f
 
 ```bibtex
 
-@misc{zheng2025bridgingquantummechanicsorganic,
-  title         = {Bridging Quantum Mechanics to Organic Liquid Properties via a Universal Force Field},
-  author        = {Tianze Zheng and Xingyuan Xu and Zhi Wang and Xu Han and Zhenliang Mu and Ziqing Zhang and Sheng Gong and Kuang Yu and Wen Yan},
-  year          = {2025},
-  eprint        = {2508.08575},
-  archivePrefix = {arXiv},
-  primaryClass  = {physics.comp-ph},
-  url           = {https://arxiv.org/abs/2508.08575}
+@article{zheng2026bridging,
+  title   = {Bridging quantum mechanics to liquid properties via a universal organic force field},
+  author  = {Tianze Zheng and Xingyuan Xu and Zhi Wang and Zhenze Yang and Yuanheng Wang and Xu Han and Lei Chen and Zhenliang Mu and Ziqing Zhang and Siyuan Liu and Sheng Gong and Kuang Yu and Wen Yan},
+  year    = {2026},
+  journal = {Nature Communications},
+  doi     = {10.1038/s41467-026-73566-3},
+  url     = {https://www.nature.com/articles/s41467-026-73566-3}
 }
 
 @Article{D4SC06640E,
