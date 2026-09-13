@@ -179,11 +179,12 @@ class PropertiesCalculator:
     def __init__(
         self,
         solvent: Union[str, Sequence[str], Dict[str, float]],
-        anion: str,
+        anion: Optional[str] = None,
         li_count: int = 34,
         salt_to_solvent_ratio: Optional[float] = None,
         salt_to_solvent_ratio_str: Optional[str] = None,
         solvent_ratio: Optional[Union[str, Sequence[float]]] = None,
+        total_solvent: Optional[int] = None,
         temperature: float = 298.0,
         base_dir: str = "./md_simulations",
         verbose: bool = True,
@@ -197,19 +198,30 @@ class PropertiesCalculator:
         solvent : str, list of str, or dict
             One solvent name ("EC"), several names (["EC", "DMC"]), or a dict
             mapping names to their molar proportions ({"EC": 3, "DMC": 7}).
-        anion : str
-            Name of anion (e.g., "PF6", "TFSI")
+        anion : str, optional
+            Name of anion (e.g., "PF6", "TFSI"). Required when `li_count > 0`
+            (the normal, salted case); must be omitted when `li_count == 0`
+            (pure-solvent mode, see `total_solvent`).
         li_count : int
-            Number of Li ions (default: 34)
+            Number of Li ions (default: 34). Set to 0 for a pure-solvent, no-salt
+            system -- in that mode, use `total_solvent` instead of a ratio to size
+            the system, and `anion`/`salt_to_solvent_ratio(_str)` must be omitted.
         salt_to_solvent_ratio : float, optional
             Ratio of salt pairs to *total* solvent molecules (e.g., 1/10 or 0.1).
             If provided, total solvent count = li_count / ratio (rounded down).
+            Only meaningful when `li_count > 0`.
         salt_to_solvent_ratio_str : str, optional
             Alternative format: "1:10" means 1 salt pair : 10 solvent molecules.
+            Only meaningful when `li_count > 0`.
         solvent_ratio : str or list of float, optional
             Molar proportions between the solvents, in the order given by
             `solvent`: "3:7" or [3, 7]. Defaults to equal parts. Ignored when
             `solvent` is a dict (the dict values are the proportions).
+        total_solvent : int, optional
+            Total number of solvent molecules. Required (and only used) when
+            `li_count == 0`: there is no salt ratio to derive the solvent count
+            from, so it must be given directly. `solvent_ratio` still controls
+            how this total is split between multiple solvents.
         temperature : float
             Temperature in Kelvin (default: 298.0)
         base_dir : str
@@ -229,6 +241,25 @@ class PropertiesCalculator:
         self.solvent = "/".join(self.solvents)
         self.anion = anion
         self.li_count = li_count
+        if li_count < 0:
+            raise ValueError(f"li_count must be >= 0, got {li_count}")
+        if li_count == 0:
+            if total_solvent is None or total_solvent <= 0:
+                raise ValueError(
+                    "total_solvent (a positive int) is required when li_count=0 (pure-solvent "
+                    "mode): there is no salt ratio to derive the solvent count from."
+                )
+            if salt_to_solvent_ratio is not None or salt_to_solvent_ratio_str is not None:
+                raise ValueError(
+                    "salt_to_solvent_ratio/salt_to_solvent_ratio_str don't apply when li_count=0 "
+                    "(pure-solvent mode); use total_solvent instead."
+                )
+        else:
+            if anion is None:
+                raise ValueError("anion is required when li_count > 0")
+            if total_solvent is not None:
+                raise ValueError("total_solvent only applies when li_count=0 (pure-solvent mode)")
+        self.total_solvent = total_solvent
         self.temperature = temperature
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -247,10 +278,12 @@ class PropertiesCalculator:
 
         # Validate and get SMILES
         self.solvent_smiles = self._get_solvent_smiles()
-        self.anion_smiles = self._get_anion_smiles()
+        self.anion_smiles = self._get_anion_smiles() if self.li_count > 0 else None
 
-        # Parse salt:solvent ratio
-        self.salt_to_solvent_ratio = self._parse_ratio(salt_to_solvent_ratio, salt_to_solvent_ratio_str)
+        # Parse salt:solvent ratio (not applicable in pure-solvent mode)
+        self.salt_to_solvent_ratio = (
+            self._parse_ratio(salt_to_solvent_ratio, salt_to_solvent_ratio_str) if self.li_count > 0 else None
+        )
 
         # Build components dictionary
         self.components = self._build_components()
@@ -374,6 +407,21 @@ class PropertiesCalculator:
 
     def _build_components(self) -> Dict[str, int]:
         """Build components dictionary from salt:solvent ratio and solvent ratio."""
+        if self.li_count == 0:
+            # Pure solvent: no CATION/anion entries at all. protocol.py's
+            # search_mixture() divides by np.min(mol_ratio), so a zero-count LI/anion
+            # entry would break it -- omit the keys entirely rather than including
+            # them as 0.
+            solvent_counts = self._apportion(self.total_solvent, self.solvent_ratio)
+            if any(c < 1 for c in solvent_counts):
+                raise ValueError(
+                    f"solvent_ratio {self.solvent_ratio} leaves a solvent with zero molecules "
+                    f"out of {self.total_solvent} total; increase total_solvent or adjust the ratio"
+                )
+            components = dict(zip(self.solvents, solvent_counts))
+            logger.info(f"Components: {components} (pure solvent, no salt)")
+            return components
+
         # salt_to_solvent_ratio = salt_pairs / total solvent molecules
         # total solvent count = li_count / ratio (rounded down), then split
         # between the solvents according to solvent_ratio.
@@ -395,8 +443,9 @@ class PropertiesCalculator:
     def _build_smiles(self) -> Dict[str, str]:
         """Build SMILES dictionary."""
         smiles = dict(self.solvent_smiles)
-        smiles[self.CATION] = self.CATION_SMILES
-        smiles[self.anion] = self.anion_smiles
+        if self.li_count > 0:
+            smiles[self.CATION] = self.CATION_SMILES
+            smiles[self.anion] = self.anion_smiles
         return smiles
 
     def _count_atoms(self) -> int:
@@ -546,6 +595,11 @@ class PropertiesCalculator:
             properties = ["density", "conductivity", "viscosity", "dielectric"]
 
         properties_lower = [p.lower() for p in properties]
+        known = {"density", "conductivity", "viscosity", "dielectric", "compressibility"}
+        unknown = sorted(set(properties_lower) - known)
+        if unknown:
+            raise ValueError(f"Unknown propert{'y' if len(unknown) == 1 else 'ies'}: {unknown}. "
+                             f"Known: {sorted(known)}")
         all_results = {}
 
         self.logger.log_section(
@@ -636,7 +690,9 @@ class PropertiesCalculator:
                 "Anion": self.anion,
                 "Cation": self.CATION,
                 "Li Count": self.li_count,
-                "Salt:Solvent Ratio": f"1:{int(1/self.salt_to_solvent_ratio)}",
+                "Salt:Solvent Ratio": (
+                    f"1:{int(1/self.salt_to_solvent_ratio)}" if self.li_count > 0 else "N/A (pure solvent)"
+                ),
             },
             "Simulation Parameters": {
                 "Temperature": f"{self.temperature} K",
