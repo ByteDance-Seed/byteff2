@@ -1,12 +1,8 @@
 #!/usr/bin/env python
-"""Pure-solvent (zero-salt) control for run_full_smiles.py's LiTFA/EC/DMC run.
+"""
 
-Same EC:DMC composition and solvent molecule counts as run_full_smiles.py
-(170 EC + 170 DMC, T=298K) but with no Li+/FTA- at all. Tests whether that
-run's anomalously high dielectric constant (390.4, vs. literature EC~90/
-DMC~3) is an artifact of unbounded ionic translational diffusion
-contaminating the dipole-fluctuation formula: this solvent-only run should
-land in a plausible range if that diagnosis is right.
+Pure-solvent (zero-salt) control for run_full_smiles.py's LiTFA/EC/DMC run.
+
 """
 import sys
 from pathlib import Path
