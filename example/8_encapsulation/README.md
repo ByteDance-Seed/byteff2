@@ -12,7 +12,6 @@ Species are given either **by name**, if they are documented in `byteff2/toolkit
 | `run_full_smiles.py` | LiFTA in EC:DMC 5:5 | undocumented species by SMILES |
 | `run_full_smiles_IL.py` | EMIM/Li/BMIM + TFSI/FSI/PF6 ionic liquid (no solvent) | every ion by SMILES |
 | `run_solvent_only.py` | pure EC:DMC 5:5, no ions | solvents by name, `li_count=0` |
-| `run_fail_name.py` | LiFTA in DMC | FTA by name, which is undocumented, so it fails on purpose |
 
 To calculate pure-solvent properties (no ions), follow `run_solvent_only.py`: set `li_count=0`, omit `anion`, and request only `density`, `viscosity`, `dielectric` (conductivity is meaningless without ions).
 
