@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "byteff2"
+version = "0.1.0"
+description = "ByteFF2: machine-learned force field and MD property toolkit for liquid electrolytes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+# Runtime dependencies. Pinned versions mirror requirements.txt, which is kept
+# as the lock file for the `byt_min` conda environment.
+#
+# Not listed on purpose (must be installed outside pip):
+#   - openmm / openmm-velocityVerlet : custom build, see submodules/openmm and deploy/
+#   - gromacs                        : system install, see README "Installing Gromacs"
+#   - CUDA-enabled torch             : pick the wheel matching your driver; the
+#                                      `torch==2.6.0` pin below accepts CPU or CUDA builds
+dependencies = [
+    "numpy~=1.26.4",
+    "torch==2.6.0",
+    "torch-geometric==2.6.1",
+    "ase==3.24.0",
+    "rdkit==2024.9.6",
+    "tqdm~=4.67.1",
+    "MDAnalysis==2.9.0",
+    "pandas~=2.3.1",
+    "h5py~=3.14.0",
+    "PyYAML==6.0.2",
+    "GitPython~=3.1.45",
+    "Sella==2.3.5",
+    "scipy~=1.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=8.4.1",
+    "pytest-xdist~=3.5",
+    "isort~=6.0.1",
+    "pylint~=3.3.8",
+    "pre-commit",
+    "yapf",
+]
+
+[project.scripts]
+byteff2-properties = "byteff2.toolkit.properties_calculator:main"
+byteff2-il-properties = "byteff2.toolkit.ionic_liquid_properties_calculator:main"
+
+[tool.setuptools.packages.find]
+include = ["byteff2*", "bytemol*"]
+exclude = ["byteff2.tests*"]
+
+[tool.setuptools.package-data]
+# Trained model weights and configs shipped with the package.
+"byteff2" = [
+    "trained_models/*",
+    "valid_data/*",
+]
