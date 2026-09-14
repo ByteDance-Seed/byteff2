@@ -1,0 +1,55 @@
+{
+  "solvent": "EC/DMC",
+  "solvents": [
+    "EC",
+    "DMC"
+  ],
+  "solvent_ratio": [
+    5.0,
+    5.0
+  ],
+  "anion": null,
+  "cation": "LI",
+  "li_count": 0,
+  "salt_to_solvent_ratio": null,
+  "components": {
+    "EC": 170,
+    "DMC": 170
+  },
+  "temperature": 298.0,
+  "custom_smiles": {},
+  "results": {
+    "density": {
+      "density": 1.1957807865354804,
+      "density_std": 0.0006805260133434048
+    },
+    "transport": {
+      "cubic_box_length_unit": "angstrom",
+      "cubic_box_length": 34.74990892581988,
+      "conductivity_unit": "mS/cm",
+      "conductivity_onsager": 0.0,
+      "conductivity_NE": 0.0,
+      "diffusivity_unit": "10^-10 m^2/s",
+      "Dself_inf": [
+        9.63985710519355,
+        10.263603711568797
+      ],
+      "viscosity": 1.3356441033848423,
+      "components": [
+        "EC",
+        "DMC"
+      ]
+    },
+    "viscosity": 1.3356441033848423,
+    "dielectric": {
+      "dielectric": 35.804085963211506,
+      "volume": 41939.86777763608,
+      "correlation_time": 24.24375176003996,
+      "units": {
+        "dielectric": "dimensionless",
+        "volume": "Angstrom^3",
+        "correlation_time": "ps"
+      }
+    }
+  }
+}

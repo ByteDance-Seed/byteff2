@@ -1,0 +1,171 @@
+2026-09-13 09:43:57 - INFO - ================================================================================
+2026-09-13 09:43:57 - INFO - PropertiesCalculator Initialization [0%]
+2026-09-13 09:43:57 - INFO - ================================================================================
+2026-09-13 09:43:57 - INFO -   ✓ Solvent: EC/DMC (5:5), Anion: None, Li count: 0
+2026-09-13 09:43:57 - INFO - Components: {'EC': 170, 'DMC': 170} (pure solvent, no salt)
+2026-09-13 09:43:57 - INFO -   ✓ Components: {'EC': 170, 'DMC': 170}
+2026-09-13 09:43:57 - INFO -   ✓ Working directory: run_solvent_only_EC_DMC
+2026-09-13 09:43:57 - INFO - ================================================================================
+2026-09-13 09:43:57 - INFO - Starting Property Calculations: density, viscosity, dielectric [10%]
+2026-09-13 09:43:57 - INFO - ================================================================================
+2026-09-13 09:43:57 - INFO -   ✓ Calculating density...
+2026-09-13 09:43:57 - INFO - Saved config to run_solvent_only_EC_DMC/density_config.json
+2026-09-13 09:43:57 - INFO - Calculating density...
+2026-09-13 09:43:57 - INFO - Running DensityProtocol
+2026-09-13 09:43:57 - INFO - running density protocol
+2026-09-13 09:43:57 - INFO - use a=0.39 for polarization solver
+2026-09-13 09:43:57 - INFO - generating force field params for EC
+2026-09-13 09:43:57 - INFO - Writing itp: run_solvent_only_EC_DMC/density_params/EC.itp
+2026-09-13 09:43:57 - INFO - Writing atp: run_solvent_only_EC_DMC/density_params/EC.atp
+2026-09-13 09:43:57 - INFO - generating force field params for DMC
+2026-09-13 09:43:57 - INFO - Writing itp: run_solvent_only_EC_DMC/density_params/DMC.itp
+2026-09-13 09:43:57 - INFO - Writing atp: run_solvent_only_EC_DMC/density_params/DMC.atp
+2026-09-13 09:43:57 - INFO - building system for dict_keys(['EC', 'DMC'])
+2026-09-13 09:43:57 - INFO - s12: 0.1690015023721859, disp_damping: 120.0
+2026-09-13 09:43:57 - INFO - molecules [('EC', 170), ('DMC', 170)]
+2026-09-13 09:43:57 - INFO - use PME
+2026-09-13 09:43:57 - INFO - use long range correction
+2026-09-13 09:43:57 - INFO - amoeba force num multipoles 3740
+2026-09-13 09:43:57 - INFO - amoeba force nonbonded method 1
+2026-09-13 09:43:58 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 09:43:58 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 09:43:58 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 09:43:58 - INFO - system force CMMotionRemover, group 0
+2026-09-13 09:43:58 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 09:43:58 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 09:43:58 - INFO - system force CustomBondForce, group 0
+2026-09-13 09:43:58 - INFO - system force MonteCarloBarostat, group 0
+2026-09-13 09:43:58 - INFO - Minimizing energy
+2026-09-13 09:43:59 - INFO - Running npt
+2026-09-13 09:46:50 - INFO - npt done
+2026-09-13 09:46:50 - INFO - Finished running density protocol
+2026-09-13 09:46:50 - INFO - {'density': 1.1957807865354804, 'density_std': 0.0006805260133434048}
+2026-09-13 09:46:50 - INFO -     Density                       :     1.195781 g/mL
+2026-09-13 09:46:50 - INFO -   ✓ Calculating transport properties...
+2026-09-13 09:46:50 - INFO - Saved config to run_solvent_only_EC_DMC/transport_config.json
+2026-09-13 09:46:50 - INFO - Calculating conductivity and viscosity...
+2026-09-13 09:46:50 - INFO - Running TransportProtocol
+2026-09-13 09:46:50 - INFO - running transport protocol
+2026-09-13 09:46:50 - INFO - use a=0.39 for polarization solver
+2026-09-13 09:46:50 - INFO - generating force field params for EC
+2026-09-13 09:46:50 - INFO - Writing itp: run_solvent_only_EC_DMC/transport_params/EC.itp
+2026-09-13 09:46:50 - INFO - Writing atp: run_solvent_only_EC_DMC/transport_params/EC.atp
+2026-09-13 09:46:50 - INFO - generating force field params for DMC
+2026-09-13 09:46:50 - INFO - Writing itp: run_solvent_only_EC_DMC/transport_params/DMC.itp
+2026-09-13 09:46:50 - INFO - Writing atp: run_solvent_only_EC_DMC/transport_params/DMC.atp
+2026-09-13 09:46:50 - INFO - building system for dict_keys(['EC', 'DMC'])
+2026-09-13 09:46:51 - INFO - s12: 0.1690015023721859, disp_damping: 120.0
+2026-09-13 09:46:51 - INFO - molecules [('EC', 170), ('DMC', 170)]
+2026-09-13 09:46:51 - INFO - use PME
+2026-09-13 09:46:51 - INFO - use long range correction
+2026-09-13 09:46:51 - INFO - amoeba force num multipoles 3740
+2026-09-13 09:46:51 - INFO - amoeba force nonbonded method 1
+2026-09-13 09:46:51 - INFO - npt run
+2026-09-13 09:46:51 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 09:46:51 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 09:46:51 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 09:46:51 - INFO - system force CMMotionRemover, group 0
+2026-09-13 09:46:51 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 09:46:51 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 09:46:51 - INFO - system force CustomBondForce, group 0
+2026-09-13 09:46:51 - INFO - system force MonteCarloBarostat, group 0
+2026-09-13 09:46:51 - INFO - Minimizing energy
+2026-09-13 09:46:52 - INFO - Running npt
+2026-09-13 11:41:16 - INFO - npt done
+2026-09-13 11:41:16 - INFO - scale box by 1.002
+2026-09-13 11:41:16 - INFO - nvt run
+2026-09-13 11:41:16 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 11:41:16 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 11:41:16 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 11:41:16 - INFO - system force CMMotionRemover, group 0
+2026-09-13 11:41:16 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 11:41:16 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 11:41:16 - INFO - system force CustomBondForce, group 0
+2026-09-13 11:41:16 - INFO - Running nvt
+2026-09-13 15:32:11 - INFO - nvt done
+2026-09-13 15:32:11 - INFO - nonequ run
+2026-09-13 15:32:11 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 15:32:11 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 15:32:11 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 15:32:11 - INFO - system force CMMotionRemover, group 0
+2026-09-13 15:32:11 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 15:32:11 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 15:32:11 - INFO - system force CustomBondForce, group 0
+2026-09-13 15:32:11 - INFO - Running nonequ
+2026-09-13 15:54:55 - INFO - nonequ done
+2026-09-13 15:54:55 - INFO - post processing transport protocol
+2026-09-13 15:54:55 - INFO - viscosity: 1.336
+2026-09-13 15:54:56 - INFO - Inferred cubic box length [angstrom]: 34.74990892581988
+2026-09-13 15:54:57 - INFO - Use frames: 19800
+2026-09-13 15:54:59 - INFO - msd_self: [9.63985710519355, 10.263603711568797]
+2026-09-13 15:54:59 - INFO - conductivity: 0.0
+2026-09-13 15:54:59 - INFO -     Viscosity                     :     1.335644 cP
+2026-09-13 15:54:59 - INFO -   ✓ Calculating dielectric constant...
+2026-09-13 15:54:59 - INFO - Saved config to run_solvent_only_EC_DMC/dielectric_config.json
+2026-09-13 15:54:59 - INFO - Calculating dielectric constant...
+2026-09-13 15:54:59 - INFO - Running DielectricProtocol
+2026-09-13 15:54:59 - INFO - running dielectric protocol
+2026-09-13 15:54:59 - INFO - use a=0.39 for polarization solver
+2026-09-13 15:55:00 - INFO - generating force field params for EC
+2026-09-13 15:55:00 - INFO - Writing itp: run_solvent_only_EC_DMC/dielectric_params/EC.itp
+2026-09-13 15:55:00 - INFO - Writing atp: run_solvent_only_EC_DMC/dielectric_params/EC.atp
+2026-09-13 15:55:00 - INFO - generating force field params for DMC
+2026-09-13 15:55:00 - INFO - Writing itp: run_solvent_only_EC_DMC/dielectric_params/DMC.itp
+2026-09-13 15:55:00 - INFO - Writing atp: run_solvent_only_EC_DMC/dielectric_params/DMC.atp
+2026-09-13 15:55:00 - INFO - building system for dict_keys(['EC', 'DMC'])
+2026-09-13 15:55:00 - INFO - s12: 0.1690015023721859, disp_damping: 120.0
+2026-09-13 15:55:00 - INFO - molecules [('EC', 170), ('DMC', 170)]
+2026-09-13 15:55:00 - INFO - use PME
+2026-09-13 15:55:00 - INFO - use long range correction
+2026-09-13 15:55:00 - INFO - amoeba force num multipoles 3740
+2026-09-13 15:55:00 - INFO - amoeba force nonbonded method 1
+2026-09-13 15:55:00 - INFO - npt run
+2026-09-13 15:55:00 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 15:55:00 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 15:55:00 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 15:55:00 - INFO - system force CMMotionRemover, group 0
+2026-09-13 15:55:00 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 15:55:00 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 15:55:00 - INFO - system force CustomBondForce, group 0
+2026-09-13 15:55:00 - INFO - system force MonteCarloBarostat, group 0
+2026-09-13 15:55:00 - INFO - Minimizing energy
+2026-09-13 15:55:02 - INFO - Running npt
+2026-09-13 16:52:13 - INFO - npt done
+2026-09-13 16:52:13 - INFO - scale box by 1.001
+2026-09-13 16:52:13 - INFO - nvt run with dipole recording
+2026-09-13 16:52:13 - INFO - system force HarmonicBondForce, group 0
+2026-09-13 16:52:13 - INFO - system force HarmonicAngleForce, group 0
+2026-09-13 16:52:13 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-13 16:52:13 - INFO - system force CMMotionRemover, group 0
+2026-09-13 16:52:13 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-13 16:52:13 - INFO - system force CustomNonbondedForce, group 1
+2026-09-13 16:52:13 - INFO - system force CustomBondForce, group 0
+2026-09-13 16:52:14 - INFO - Running nvt
+2026-09-13 19:11:38 - INFO - nvt done
+2026-09-13 19:11:38 - INFO - post processing dielectric protocol
+2026-09-13 19:11:38 - INFO - {'dielectric': 35.804085963211506, 'volume': 41939.86777763608, 'correlation_time': 24.24375176003996, 'units': {'dielectric': 'dimensionless', 'volume': 'Angstrom^3', 'correlation_time': 'ps'}}
+2026-09-13 19:11:38 - INFO -     Dielectric Constant           :    35.804086
+2026-09-13 19:11:38 - INFO - ================================================================================
+2026-09-13 19:11:38 - INFO - Calculation Complete [100%]
+2026-09-13 19:11:38 - INFO - ================================================================================
+2026-09-13 19:11:38 - INFO -   ✓ Saved summary to run_solvent_only_EC_DMC/summary.json
+2026-09-13 19:11:38 - INFO - ================================================================================
+2026-09-13 19:11:38 - INFO - CALCULATION SUMMARY
+2026-09-13 19:11:38 - INFO - ================================================================================
+2026-09-13 19:11:38 - INFO - 
+System Composition:
+2026-09-13 19:11:38 - INFO -   Solvent                       : EC/DMC
+2026-09-13 19:11:38 - INFO -   Solvent Ratio                 : 5:5
+2026-09-13 19:11:38 - INFO -   Anion                         : None
+2026-09-13 19:11:38 - INFO -   Cation                        : LI
+2026-09-13 19:11:38 - INFO -   Li Count                      : 0
+2026-09-13 19:11:38 - INFO -   Salt:Solvent Ratio            : N/A (pure solvent)
+2026-09-13 19:11:38 - INFO - 
+Simulation Parameters:
+2026-09-13 19:11:38 - INFO -   Temperature                   : 298.0 K
+2026-09-13 19:11:38 - INFO -   Components                    : {'EC': 170, 'DMC': 170}
+2026-09-13 19:11:38 - INFO - 
+Calculated Properties:
+2026-09-13 19:11:38 - INFO -   Density (g/mL)                : 1.195781
+2026-09-13 19:11:38 - INFO -   Viscosity (cP)                : 1.335644
+2026-09-13 19:11:38 - INFO -   Dielectric Constant           : 35.804086

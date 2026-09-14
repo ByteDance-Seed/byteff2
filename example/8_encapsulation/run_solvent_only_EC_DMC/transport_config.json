@@ -1,0 +1,16 @@
+{
+  "protocol": "Transport",
+  "params_dir": "run_solvent_only_EC_DMC/transport_params",
+  "output_dir": "run_solvent_only_EC_DMC/transport_results",
+  "working_dir": "run_solvent_only_EC_DMC/transport_working_dir",
+  "temperature": 298,
+  "natoms": 3740,
+  "components": {
+    "EC": 170,
+    "DMC": 170
+  },
+  "smiles": {
+    "EC": "O=C1OCCO1",
+    "DMC": "COC(=O)OC"
+  }
+}

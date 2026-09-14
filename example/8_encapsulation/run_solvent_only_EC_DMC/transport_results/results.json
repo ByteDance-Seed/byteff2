@@ -1,0 +1,17 @@
+{
+  "cubic_box_length_unit": "angstrom",
+  "cubic_box_length": 34.74990892581988,
+  "conductivity_unit": "mS/cm",
+  "conductivity_onsager": 0.0,
+  "conductivity_NE": 0.0,
+  "diffusivity_unit": "10^-10 m^2/s",
+  "Dself_inf": [
+    9.63985710519355,
+    10.263603711568797
+  ],
+  "viscosity": 1.3356441033848423,
+  "components": [
+    "EC",
+    "DMC"
+  ]
+}

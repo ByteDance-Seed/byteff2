@@ -1,0 +1,16 @@
+{
+  "protocol": "Density",
+  "params_dir": "run_solvent_only_EC_DMC/density_params",
+  "output_dir": "run_solvent_only_EC_DMC/density_results",
+  "working_dir": "run_solvent_only_EC_DMC/density_working_dir",
+  "temperature": 298,
+  "natoms": 3740,
+  "components": {
+    "EC": 170,
+    "DMC": 170
+  },
+  "smiles": {
+    "EC": "O=C1OCCO1",
+    "DMC": "COC(=O)OC"
+  }
+}

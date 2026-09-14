@@ -1,0 +1,10 @@
+{
+  "dielectric": 35.804085963211506,
+  "volume": 41939.86777763608,
+  "correlation_time": 24.24375176003996,
+  "units": {
+    "dielectric": "dimensionless",
+    "volume": "Angstrom^3",
+    "correlation_time": "ps"
+  }
+}
