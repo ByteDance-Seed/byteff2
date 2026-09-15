@@ -1,0 +1,23 @@
+{
+  "Dself_inf": [
+    5.94447472464026,
+    5.555831038113785,
+    4.67126053441088,
+    4.423482956714615,
+    2.9651628282444285
+  ],
+  "components": [
+    "MA",
+    "EC",
+    "DMC",
+    "PF6",
+    "LI"
+  ],
+  "conductivity_NE": 28.81594235261864,
+  "conductivity_onsager": 19.080587311402976,
+  "conductivity_unit": "mS/cm",
+  "cubic_box_length": 35.562704687448985,
+  "cubic_box_length_unit": "angstrom",
+  "diffusivity_unit": "10^-10 m^2/s",
+  "viscosity": 2.4627924992095815
+}

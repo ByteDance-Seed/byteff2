@@ -1,0 +1,28 @@
+; ITP file created by ByteFF-ML, 2026-09-13 22:32:34.764372
+
+[ defaults ]
+;     nbfunc   comb-rule   gen-pairs     fudgeLJ     fudgeQQ
+           1           2         yes  0.50000000  0.50000000
+
+#include "MA.itp"
+#include "EC.itp"
+#include "DMC.itp"
+#include "PF6.itp"
+#include "LI.itp"
+
+#include "MA.atp"
+#include "EC.atp"
+#include "DMC.atp"
+#include "PF6.atp"
+#include "LI.atp"
+
+[ system ]
+Full System
+
+[ molecules ]
+;molecule            nmols
+ MA                    136
+ EC                    102
+ DMC                   102
+ PF6                    34
+ LI                     34
