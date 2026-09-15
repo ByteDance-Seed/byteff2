@@ -15,7 +15,7 @@ requires-python = ">=3.11"
 #
 # Not listed on purpose (must be installed outside pip):
 #   - openmm / openmm-velocityVerlet : custom build, see submodules/openmm and deploy/
-#   - gromacs                        : system install, see README "Installing Gromacs"
+#   - packmol                        : system install, see README "Installing Packmol"
 #   - CUDA-enabled torch             : pick the wheel matching your driver; the
 #                                      `torch==2.6.0` pin below accepts CPU or CUDA builds
 dependencies = [

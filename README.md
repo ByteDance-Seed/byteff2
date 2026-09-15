@@ -48,24 +48,29 @@ All required Python packages are listed in requirements.txt. To install them, ru
 ```
 pip install -r requirements.txt
 ```
-### Installing Gromacs
-Download Gromacs from [official website](https://manual.gromacs.org/documentation/current/download.html).
+### Installing Packmol
+Packmol builds the initial liquid box. The simplest route is conda:
 ```
-wget https://ftp.gromacs.org/gromacs/gromacs-2025.3.tar.gz
+conda install -c conda-forge packmol
 ```
 
-To install Gromacs, please refer to the [official documentation](https://manual.gromacs.org/documentation/current/install-guide/index.html).
+Or build it from source (see the [Packmol site](https://m3g.github.io/packmol)):
 ```
-tar xfz gromacs-2025.3.tar.gz
-cd gromacs-2025.3
-mkdir build
-cd build
-cmake .. -DGMX_BUILD_OWN_FFTW=ON -DREGRESSIONTEST_DOWNLOAD=ON
+git clone https://github.com/m3g/packmol.git
+cd packmol
 make
-make check
-sudo make install
-source /usr/local/gromacs/bin/GMXRC
 ```
+
+ByteFF2 looks for the executable in this order: `$PACKMOL_BIN`, then `packmol` on
+your `$PATH`. If it lives somewhere unusual, point at it directly:
+```
+export PACKMOL_BIN=/path/to/packmol
+```
+
+> Gromacs is no longer required. Earlier versions used `gmx editconf` and
+> `gmx insert-molecules` to pack the box; Packmol now does that job. ByteFF2
+> still reads and writes Gromacs `.top`/`.itp`/`.gro` **files** (that is how
+> OpenMM ingests the force field), but the `gmx` binary is never invoked.
 
 ### Installing OpenMM for ByteFF2
 

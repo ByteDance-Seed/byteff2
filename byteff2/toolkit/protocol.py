@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import subprocess
 from enum import Enum
 from typing import OrderedDict
 
@@ -15,8 +14,8 @@ from scipy import signal
 from byteff2.md_utils.md_run import DipoleReporter, dcd_read, npt_run, nvt_run, rescale_box, volume_calc
 from byteff2.md_utils.onsager_conductivity import onsager_calc
 from byteff2.md_utils.viscosity import nonequ_run, viscosity_calc
-from byteff2.toolkit.gmxtool import GMXScript
 from byteff2.toolkit.openmmtool import generate_openmm_system
+from byteff2.toolkit.packmoltool import build_box
 from byteff2.train.utils import get_nb_params, load_model
 from byteff2.utils.definitions import CHG_FACTOR
 from bytemol.core import Molecule
@@ -119,23 +118,13 @@ def load_topo(topo_dir, mol_name):
     return component
 
 
-def generate_system_gro(components, working_dir, box):
-    script = GMXScript()
-    script.add('cd "$(dirname "$0")" ')
-    for i, c in enumerate(components.values()):
-        # Generate the box from the first component
-        if i == 0:
-            # Generate the box for components
-            script.init_gro_box(f"{c.name}.gro", box)
-            rest_molecules = c.molar_num - 1
-            if rest_molecules:
-                script.insert_molecules(f"{c.name}.gro", rest_molecules)
-            continue
-        script.insert_molecules(f"{c.name}.gro", c.molar_num)
+def generate_system_gro(components, working_dir, box, timeout=300):
+    """Pack the components into a cubic box of edge ``box`` nm with packmol.
 
-    # Add run md run command
-    script.finish()
-    script.write(f'{working_dir}/run_gmx.sh')
+    Writes ``working_dir/solvent_salt.gro``. Returns False if packmol could not
+    fit every molecule, so the caller can retry with a larger box.
+    """
+    return build_box(components, working_dir, box, timeout=timeout)
 
 
 def write_gro(mol: Molecule, save_path: str):
@@ -252,26 +241,11 @@ class Protocol:
             return components
 
         box = init_box
-        for _ in range(5):
-            generate_system_gro(components, working_dir, box)
-            command = f'cd {working_dir} && bash -x run_gmx.sh'
-            try:
-                child = subprocess.run(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=300,
-                    check=True,
-                )
-            except subprocess.TimeoutExpired:
-                print("Script time out!")
+        for attempt in range(5):
+            if not generate_system_gro(components, working_dir, box):
+                logger.warning("packing failed at box %.3f nm, growing the box (attempt %d/5)", box, attempt + 1)
                 box *= 1.05
                 continue
-            if child.returncode != 0:
-                print("Script gmx failed")
-                raise subprocess.CalledProcessError(child.returncode, command)
             gro_file = os.path.join(working_dir, "solvent_salt.gro")
             with open(gro_file, "r") as f:
                 gro_total_atoms = int(f.readlines()[1].strip().split()[0])
@@ -279,6 +253,8 @@ class Protocol:
                 box *= 1.05
             else:
                 break
+        else:
+            raise RuntimeError(f"packmol failed to pack the system after 5 attempts, last box {box:.3f} nm")
         shutil.copy(f'{working_dir}/solvent_salt.gro', f'{self.params_dir}/solvent_salt.gro')
         shutil.copy(f'{working_dir}/system.top', f'{self.params_dir}/system.top')
         return components
