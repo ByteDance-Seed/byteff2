@@ -1,0 +1,18 @@
+{
+  "protocol": "Density",
+  "params_dir": "run_custom_solvent_by_smiles/density_params",
+  "output_dir": "run_custom_solvent_by_smiles/density_results",
+  "working_dir": "run_custom_solvent_by_smiles/density_working_dir",
+  "temperature": 298,
+  "natoms": 3672,
+  "components": {
+    "DMSO": 340,
+    "LI": 34,
+    "PF6": 34
+  },
+  "smiles": {
+    "DMSO": "CS(C)=O",
+    "LI": "[Li+]",
+    "PF6": "F[P-](F)(F)(F)(F)F"
+  }
+}

@@ -1,0 +1,135 @@
+2026-09-14 11:04:02 - INFO - ================================================================================
+2026-09-14 11:04:02 - INFO - PropertiesCalculator Initialization [0%]
+2026-09-14 11:04:02 - INFO - ================================================================================
+2026-09-14 11:04:02 - INFO -   ✓ Solvent: DMSO, Anion: PF6, Li count: 34
+2026-09-14 11:04:02 - INFO - Components: {'DMSO': 340, 'LI': 34, 'PF6': 34} (salt:solvent 0.1000, solvent ratio 1)
+2026-09-14 11:04:02 - INFO -   ✓ Components: {'DMSO': 340, 'LI': 34, 'PF6': 34}
+2026-09-14 11:04:02 - INFO -   ✓ Working directory: run_custom_solvent_by_smiles
+2026-09-14 11:04:02 - INFO - ================================================================================
+2026-09-14 11:04:02 - INFO - Starting Property Calculations: density, viscosity, conductivity [10%]
+2026-09-14 11:04:02 - INFO - ================================================================================
+2026-09-14 11:04:02 - INFO -   ✓ Calculating density...
+2026-09-14 11:04:02 - INFO - Saved config to run_custom_solvent_by_smiles/density_config.json
+2026-09-14 11:04:02 - INFO - Calculating density...
+2026-09-14 11:04:02 - INFO - Running DensityProtocol
+2026-09-14 11:04:02 - INFO - running density protocol
+2026-09-14 11:04:02 - INFO - use a=0.39 for polarization solver
+2026-09-14 11:04:02 - INFO - generating force field params for DMSO
+2026-09-14 11:04:02 - INFO - Sulfoxide to -S+(O-) transform [!O:1][S+0;D3:2](=[O:3])[!O:4]>>[*:1][S+1:2]([O-:3])[*:4] has been applied 1 times.
+2026-09-14 11:04:03 - INFO - Writing itp: run_custom_solvent_by_smiles/density_params/DMSO.itp
+2026-09-14 11:04:03 - INFO - Writing atp: run_custom_solvent_by_smiles/density_params/DMSO.atp
+2026-09-14 11:04:03 - INFO - generating force field params for LI
+2026-09-14 11:04:03 - INFO - Writing itp: run_custom_solvent_by_smiles/density_params/LI.itp
+2026-09-14 11:04:03 - INFO - Writing atp: run_custom_solvent_by_smiles/density_params/LI.atp
+2026-09-14 11:04:03 - INFO - generating force field params for PF6
+2026-09-14 11:04:03 - INFO - Writing itp: run_custom_solvent_by_smiles/density_params/PF6.itp
+2026-09-14 11:04:03 - INFO - Writing atp: run_custom_solvent_by_smiles/density_params/PF6.atp
+2026-09-14 11:04:03 - INFO - building system for dict_keys(['DMSO', 'LI', 'PF6'])
+2026-09-14 11:04:03 - INFO - s12: 0.1690015023721859, disp_damping: 120.0
+2026-09-14 11:04:03 - INFO - molecules [('DMSO', 340), ('PF6', 34), ('LI', 34)]
+2026-09-14 11:04:03 - INFO - use PME
+2026-09-14 11:04:03 - INFO - use long range correction
+2026-09-14 11:04:03 - INFO - amoeba force num multipoles 3672
+2026-09-14 11:04:03 - INFO - amoeba force nonbonded method 1
+2026-09-14 11:04:03 - INFO - system force HarmonicBondForce, group 0
+2026-09-14 11:04:03 - INFO - system force HarmonicAngleForce, group 0
+2026-09-14 11:04:03 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-14 11:04:03 - INFO - system force CMMotionRemover, group 0
+2026-09-14 11:04:03 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-14 11:04:03 - INFO - system force CustomNonbondedForce, group 1
+2026-09-14 11:04:03 - INFO - system force CustomBondForce, group 0
+2026-09-14 11:04:03 - INFO - system force MonteCarloBarostat, group 0
+2026-09-14 11:04:03 - INFO - Minimizing energy
+2026-09-14 11:04:04 - INFO - Running npt
+2026-09-14 11:07:02 - INFO - npt done
+2026-09-14 11:07:02 - INFO - Finished running density protocol
+2026-09-14 11:07:02 - INFO - {'density': 1.211897187226581, 'density_std': 0.0005188903864674451}
+2026-09-14 11:07:02 - INFO -     Density                       :     1.211897 g/mL
+2026-09-14 11:07:02 - INFO -   ✓ Calculating transport properties...
+2026-09-14 11:07:02 - INFO - Saved config to run_custom_solvent_by_smiles/transport_config.json
+2026-09-14 11:07:02 - INFO - Calculating conductivity and viscosity...
+2026-09-14 11:07:02 - INFO - Running TransportProtocol
+2026-09-14 11:07:02 - INFO - running transport protocol
+2026-09-14 11:07:02 - INFO - use a=0.39 for polarization solver
+2026-09-14 11:07:02 - INFO - generating force field params for DMSO
+2026-09-14 11:07:02 - INFO - Sulfoxide to -S+(O-) transform [!O:1][S+0;D3:2](=[O:3])[!O:4]>>[*:1][S+1:2]([O-:3])[*:4] has been applied 1 times.
+2026-09-14 11:07:02 - INFO - Writing itp: run_custom_solvent_by_smiles/transport_params/DMSO.itp
+2026-09-14 11:07:02 - INFO - Writing atp: run_custom_solvent_by_smiles/transport_params/DMSO.atp
+2026-09-14 11:07:02 - INFO - generating force field params for LI
+2026-09-14 11:07:02 - INFO - Writing itp: run_custom_solvent_by_smiles/transport_params/LI.itp
+2026-09-14 11:07:02 - INFO - Writing atp: run_custom_solvent_by_smiles/transport_params/LI.atp
+2026-09-14 11:07:02 - INFO - generating force field params for PF6
+2026-09-14 11:07:02 - INFO - Writing itp: run_custom_solvent_by_smiles/transport_params/PF6.itp
+2026-09-14 11:07:02 - INFO - Writing atp: run_custom_solvent_by_smiles/transport_params/PF6.atp
+2026-09-14 11:07:02 - INFO - building system for dict_keys(['DMSO', 'LI', 'PF6'])
+2026-09-14 11:07:02 - INFO - s12: 0.1690015023721859, disp_damping: 120.0
+2026-09-14 11:07:02 - INFO - molecules [('DMSO', 340), ('PF6', 34), ('LI', 34)]
+2026-09-14 11:07:02 - INFO - use PME
+2026-09-14 11:07:02 - INFO - use long range correction
+2026-09-14 11:07:02 - INFO - amoeba force num multipoles 3672
+2026-09-14 11:07:02 - INFO - amoeba force nonbonded method 1
+2026-09-14 11:07:02 - INFO - npt run
+2026-09-14 11:07:03 - INFO - system force HarmonicBondForce, group 0
+2026-09-14 11:07:03 - INFO - system force HarmonicAngleForce, group 0
+2026-09-14 11:07:03 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-14 11:07:03 - INFO - system force CMMotionRemover, group 0
+2026-09-14 11:07:03 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-14 11:07:03 - INFO - system force CustomNonbondedForce, group 1
+2026-09-14 11:07:03 - INFO - system force CustomBondForce, group 0
+2026-09-14 11:07:03 - INFO - system force MonteCarloBarostat, group 0
+2026-09-14 11:07:03 - INFO - Minimizing energy
+2026-09-14 11:07:04 - INFO - Running npt
+2026-09-14 13:05:44 - INFO - npt done
+2026-09-14 13:05:44 - INFO - scale box by 1.001
+2026-09-14 13:05:44 - INFO - nvt run
+2026-09-14 13:05:45 - INFO - system force HarmonicBondForce, group 0
+2026-09-14 13:05:45 - INFO - system force HarmonicAngleForce, group 0
+2026-09-14 13:05:45 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-14 13:05:45 - INFO - system force CMMotionRemover, group 0
+2026-09-14 13:05:45 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-14 13:05:45 - INFO - system force CustomNonbondedForce, group 1
+2026-09-14 13:05:45 - INFO - system force CustomBondForce, group 0
+2026-09-14 13:05:45 - INFO - Running nvt
+2026-09-14 17:06:33 - INFO - nvt done
+2026-09-14 17:06:33 - INFO - nonequ run
+2026-09-14 17:06:33 - INFO - system force HarmonicBondForce, group 0
+2026-09-14 17:06:33 - INFO - system force HarmonicAngleForce, group 0
+2026-09-14 17:06:33 - INFO - system force PeriodicTorsionForce, group 0
+2026-09-14 17:06:33 - INFO - system force CMMotionRemover, group 0
+2026-09-14 17:06:33 - INFO - system force AmoebaMultipoleForce, group 1
+2026-09-14 17:06:33 - INFO - system force CustomNonbondedForce, group 1
+2026-09-14 17:06:33 - INFO - system force CustomBondForce, group 0
+2026-09-14 17:06:33 - INFO - Running nonequ
+2026-09-14 17:30:04 - INFO - nonequ done
+2026-09-14 17:30:04 - INFO - post processing transport protocol
+2026-09-14 17:30:04 - INFO - viscosity: 3.742
+2026-09-14 17:30:05 - INFO - Inferred cubic box length [angstrom]: 35.15885987495814
+2026-09-14 17:30:05 - INFO - Use frames: 19800
+2026-09-14 17:30:07 - INFO - msd_self: [3.521039998490078, 2.557356373712937, 1.7455782661500077]
+2026-09-14 17:30:07 - INFO - conductivity: 13.03612259435524
+2026-09-14 17:30:07 - INFO -     Conductivity (Onsager)        :    13.036123 mS/cm
+2026-09-14 17:30:07 - INFO -     Viscosity                     :     3.741502 cP
+2026-09-14 17:30:07 - INFO - ================================================================================
+2026-09-14 17:30:07 - INFO - Calculation Complete [100%]
+2026-09-14 17:30:07 - INFO - ================================================================================
+2026-09-14 17:30:07 - INFO -   ✓ Saved summary to run_custom_solvent_by_smiles/summary.json
+2026-09-14 17:30:07 - INFO - ================================================================================
+2026-09-14 17:30:07 - INFO - CALCULATION SUMMARY
+2026-09-14 17:30:07 - INFO - ================================================================================
+2026-09-14 17:30:07 - INFO - 
+System Composition:
+2026-09-14 17:30:07 - INFO -   Solvent                       : DMSO
+2026-09-14 17:30:07 - INFO -   Solvent Ratio                 : 1
+2026-09-14 17:30:07 - INFO -   Anion                         : PF6
+2026-09-14 17:30:07 - INFO -   Cation                        : LI
+2026-09-14 17:30:07 - INFO -   Li Count                      : 34
+2026-09-14 17:30:07 - INFO -   Salt:Solvent Ratio            : 1:10
+2026-09-14 17:30:07 - INFO - 
+Simulation Parameters:
+2026-09-14 17:30:07 - INFO -   Temperature                   : 298.0 K
+2026-09-14 17:30:07 - INFO -   Components                    : {'DMSO': 340, 'LI': 34, 'PF6': 34}
+2026-09-14 17:30:07 - INFO - 
+Calculated Properties:
+2026-09-14 17:30:07 - INFO -   Density (g/mL)                : 1.211897
+2026-09-14 17:30:07 - INFO -   Conductivity (mS/cm)          : 13.036123
+2026-09-14 17:30:07 - INFO -   Viscosity (cP)                : 3.741502

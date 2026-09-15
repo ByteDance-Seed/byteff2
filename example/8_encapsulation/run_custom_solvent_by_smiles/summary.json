@@ -1,0 +1,49 @@
+{
+  "solvent": "DMSO",
+  "solvents": [
+    "DMSO"
+  ],
+  "solvent_ratio": [
+    1.0
+  ],
+  "anion": "PF6",
+  "cation": "LI",
+  "li_count": 34,
+  "salt_to_solvent_ratio": 0.1,
+  "components": {
+    "DMSO": 340,
+    "LI": 34,
+    "PF6": 34
+  },
+  "temperature": 298.0,
+  "custom_smiles": {
+    "DMSO": "CS(C)=O"
+  },
+  "results": {
+    "density": {
+      "density": 1.211897187226581,
+      "density_std": 0.0005188903864674451
+    },
+    "transport": {
+      "cubic_box_length_unit": "angstrom",
+      "cubic_box_length": 35.15885987495814,
+      "conductivity_unit": "mS/cm",
+      "conductivity_onsager": 13.03612259435524,
+      "conductivity_NE": 16.87780150816032,
+      "diffusivity_unit": "10^-10 m^2/s",
+      "Dself_inf": [
+        3.521039998490078,
+        2.557356373712937,
+        1.7455782661500077
+      ],
+      "viscosity": 3.74150215290016,
+      "components": [
+        "DMSO",
+        "PF6",
+        "LI"
+      ]
+    },
+    "conductivity": 13.03612259435524,
+    "viscosity": 3.74150215290016
+  }
+}

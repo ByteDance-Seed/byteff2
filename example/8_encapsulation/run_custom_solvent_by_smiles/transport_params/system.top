@@ -1,0 +1,22 @@
+; ITP file created by ByteFF-ML, 2026-09-14 11:07:02.657008
+
+[ defaults ]
+;     nbfunc   comb-rule   gen-pairs     fudgeLJ     fudgeQQ
+           1           2         yes  0.50000000  0.50000000
+
+#include "DMSO.itp"
+#include "PF6.itp"
+#include "LI.itp"
+
+#include "DMSO.atp"
+#include "PF6.atp"
+#include "LI.atp"
+
+[ system ]
+Full System
+
+[ molecules ]
+;molecule            nmols
+ DMSO                  340
+ PF6                    34
+ LI                     34
