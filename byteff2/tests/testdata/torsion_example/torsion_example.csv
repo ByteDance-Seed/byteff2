@@ -1,0 +1,4 @@
+uuid,mapped_nonisomeric_smiles,mapped_isomeric_smiles,torsion_indices,h5_file,num_constraints
+73ee94df4e015487afceefd8b2e6ab4f,[C:1]([c:2]1[c:3]([H:11])[n+:4]([O-:5])[o:6][n:7]1)([H:8])([H:9])[H:10],[C:1]([c:2]1[c:3]([H:11])[n+:4]([O-:5])[o:6][n:7]1)([H:8])([H:9])[H:10],"[1, 2, 3, 5]",torsion_example.h5,15
+1f142c849ec05a839bb238ac9f33843b,[C:1]([c:2]1[n:3][n:4][s:5][c:6]1[N:7]([H:11])[H:12])([H:8])([H:9])[H:10],[C:1]([c:2]1[n:3][n:4][s:5][c:6]1[N:7]([H:11])[H:12])([H:8])([H:9])[H:10],"[1, 2, 3, 4]",torsion_example.h5,15
+db0c95fbb4925394b70d68b7874d5ef9,[S:1]=[C:2]1[N:3]([H:8])[N:4]([H:9])[C:5]([H:10])([H:11])[N:6]([H:12])[N:7]1[H:13],[S:1]=[C:2]1[N:3]([H:8])[N:4]([H:9])[C:5]([H:10])([H:11])[N:6]([H:12])[N:7]1[H:13],"[1, 6, 5, 4]",torsion_example.h5,20

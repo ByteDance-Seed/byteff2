@@ -1,0 +1,20 @@
+{
+    "protocol": "Density",
+    "params_dir": "data/md_trj/param_n2n5",
+    "output_dir": "data/md_trj/results_n2n5",
+    "working_dir": "data/md_trj/results_n2n5",
+    "temperature": 298,
+    "natoms": 5000,
+    "components": {
+        "ACE": 100,
+        "ACN": 100,
+        "HAC": 100,
+        "BZ": 100
+    },
+    "smiles": {
+        "ACE": "CC(C)=O",
+        "ACN": "CC#N",
+        "HAC": "CC(=O)O",
+        "BZ": "c1ccccc1"
+    }
+}

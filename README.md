@@ -203,6 +203,7 @@ You can refer to examples in the `example` directory; more details are available
 
 ### ByteFF examples
 * `example/ByteFF/1_training` contains scripts for data preprocessing, GAFF2/AM1-BCC target generation, pretraining, and training ByteFF model.
+* `example/ByteFF/2_write_params` contains scripts to generate force field parameters using a trained ByteFF model for MD simulations.
 
 ### ByteFF-Pol examples
 * `example/ByteFF-Pol/0_data_preparation` contains scripts for preparing molecular data for training ByteFF-Pol.

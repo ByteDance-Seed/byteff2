@@ -1,0 +1,137 @@
+# config for train MLFFParams
+
+meta:
+  work_folder: ./pretrain_logs
+  random_seed: 0
+  fp64: false
+  print_grad: false
+  save_debug_data: false
+
+dataset:
+  - config: ./pretrain_preprocessed/dataset_config.yaml
+    batch_size: 64
+    shuffle: false
+    skip_ff: true
+    num_workers: 0
+    train_ratio: 0.9
+    loss_weight: 1.0
+    # shard_id: 0
+    loss:
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreMMBonded.proper_k
+          label: proper_k
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.charges
+          label: atomic_charge
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.sigma
+          label: sigma
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.epsilon
+          label: epsilon
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: bond
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: angle
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: improper
+      - loss_type: Partial_Hessian_MAPE
+        weight: 1.0
+    aux_loss:
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreMMBonded.proper_k
+          label: proper_k
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.charges
+          label: atomic_charge
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.sigma
+          label: sigma
+      - loss_type: ParamMSE
+        weight: 1.0
+        kwargs:
+          param: PreLJEs.epsilon
+          label: epsilon
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: bond
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: angle
+      - loss_type: BondedEnergy
+        weight: 1.0
+        kwargs:
+          param: improper
+      - loss_type: Partial_Hessian_MAPE
+        weight: 1.0
+
+model:
+  supported_elements: [1, 6, 7, 8, 9, 15, 16, 17, 35, 53]
+  graph_block:
+    feature_layer:
+      atom_embedding_dim: 32
+      node_mlp_dims: [64, 256, 2]  # (hidden, out, layers)
+      edge_mlp_dims: [64, 256, 2]  # (hidden, out, layers)
+      act: gelu
+    gnn_layer:
+      gnn_type: EGT
+      gnn_dims: [256, 256, 4]  # (hidden, out, layers)
+      jk: cat
+      act: gelu
+      heads: 16
+      at_channels: 16
+      ffn_dims: [256, 2]  # (hidden, layers)
+  ff_block:
+    - type: MMBonded
+      pre_mlp_dims: [256, 256, 3]  # (hidden, out, layers)
+      post_mlp_dims: [256, 256, 1]  # (hidden, out, layers)
+      out_mlp_dims: [256, 4]  # (hidden, layers)
+      tanh_output: 20.
+      act: gelu
+    - type: LJEs
+      pre_mlp_dims: [512, 512, 4]  # (hidden, out, layers)
+      out_mlp_dims: [256, 3]  # (hidden, layers)
+      act: gelu
+      tanh_output: 20.
+training:
+  valid_interval: 4
+  ckpt_interval: 20
+
+  max_epoch: 99999
+  max_ffopt_iters: 1
+  
+  # grad_clip: 1.0
+  optimizer:
+    type: RAdam
+    lr: 1.0e-4
+  scheduler:
+    type: ReduceLROnPlateau
+    factor: 0.2
+    patience: 10
+    threshold_mode: abs
+    threshold: 1.0e-09
+
+  early_stop_patience: 40
+  ignore_tolerance: 1.0e-06

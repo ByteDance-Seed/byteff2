@@ -1,0 +1,16 @@
+# Install pre-commit by https://pre-commit.com/
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --no-project --with ruff ruff check --fix
+        language: system
+        types: [python]
+        exclude: (^|.*/)(deprecated|debug)/|^scripts/|^submodules/openmm(?:/|$)
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --no-project --with ruff ruff format
+        language: system
+        types: [python]
+        exclude: (^|.*/)(deprecated|debug)/|^scripts/|^submodules/openmm(?:/|$)
