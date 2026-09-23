@@ -13,9 +13,10 @@
 # limitations under the License.
 
 import torch
-import torch.nn as nn
 from torch import LongTensor, Tensor
+import torch.nn as nn
 from torch_geometric.utils import cumsum, scatter
+
 
 # pylint: disable=not-callable
 
@@ -24,12 +25,11 @@ def cosine_cutoff(values: torch.Tensor, lower: float, upper: float):
     cutoffs = 0.5 * (torch.cos((values - lower) / (upper - lower) * torch.pi) + 1.0)
     # remove contributions below the cutoff radius
     cutoffs = cutoffs * (values < upper).float()
-    cutoffs = torch.where(values < lower, 1., cutoffs)
+    cutoffs = torch.where(values < lower, 1.0, cutoffs)
     return cutoffs
 
 
 class CosineCutoff(nn.Module):
-
     def __init__(self, cutoff_lower=0.0, cutoff_upper=5.0):
         super(CosineCutoff, self).__init__()
         self.cutoff_lower = cutoff_lower
@@ -41,7 +41,6 @@ class CosineCutoff(nn.Module):
 
 
 class ExpNormalSmearing(nn.Module):
-
     def __init__(self, cutoff_lower=0.0, cutoff_upper=5.0, num_rbf=32, trainable=True):
         super(ExpNormalSmearing, self).__init__()
         self.cutoff_lower = cutoff_lower
@@ -65,7 +64,7 @@ class ExpNormalSmearing(nn.Module):
         # https://pubs.acs.org/doi/10.1021/acs.jctc.9b00181
         start_value = torch.exp(torch.scalar_tensor(-self.cutoff_upper + self.cutoff_lower))
         means = torch.linspace(start_value, 1, self.num_rbf)
-        betas = torch.tensor([(2 / self.num_rbf * (1 - start_value))**-2] * self.num_rbf)
+        betas = torch.tensor([(2 / self.num_rbf * (1 - start_value)) ** -2] * self.num_rbf)
         return means, betas
 
     def reset_parameters(self):
@@ -75,14 +74,15 @@ class ExpNormalSmearing(nn.Module):
 
     def forward(self, dist):
         dist = dist.unsqueeze(-1)
-        return self.cutoff_fn(dist) * torch.exp(-self.betas * (torch.exp(self.alpha *
-                                                                         (-dist + self.cutoff_lower)) - self.means)**2)
+        return self.cutoff_fn(dist) * torch.exp(
+            -self.betas * (torch.exp(self.alpha * (-dist + self.cutoff_lower)) - self.means) ** 2
+        )
 
 
-def reduce_counts(src: Tensor, counts: LongTensor, reduce: str = 'sum'):
+def reduce_counts(src: Tensor, counts: LongTensor, reduce: str = "sum"):
     """
     Reduce values to batch accoring to counts.
-    
+
     Example:
     src: [1, 2, 1, 1], counts: [3, 1] -->
     ret: [4, 1]
@@ -94,11 +94,26 @@ def reduce_counts(src: Tensor, counts: LongTensor, reduce: str = 'sum'):
     return ret
 
 
-def batch_to_atoms(src: Tensor, batch: LongTensor) -> Tensor:
+def batch_to_atoms(src: Tensor, counts: LongTensor) -> Tensor:
     """[bs, nconfs] -> [natoms, nconfs, 3]"""
-    ret = torch.gather(src, 0, batch)
+    batch = torch.arange(len(counts), dtype=torch.int64, device=src.device)
+    batch = torch.repeat_interleave(batch, counts, dim=0)  # [natoms]
+    ret = torch.gather(src, 0, batch.unsqueeze(1).expand(-1, src.size(1)))
     ret = ret.unsqueeze(-1).expand(-1, -1, 3)
     return ret
+
+
+def batch_dot(x: Tensor, y: Tensor, counts: LongTensor, keep_dim: bool = False) -> Tensor:
+    """reduce according to batch tensor
+    a, b: [natoms, nconfs, 3]
+    batch: [natoms, nconfs]
+    """
+    prod = torch.sum(x * y, dim=-1)
+    prod_sum = reduce_counts(prod, counts)
+    if keep_dim:
+        return batch_to_atoms(prod_sum, counts)
+    else:
+        return prod_sum
 
 
 def get_batch_idx(idx: int, counts: Tensor) -> int:
@@ -176,15 +191,29 @@ def get_dihedral_angle_vec(r0: Tensor, r1: Tensor, r2: Tensor, r3: Tensor, with_
         uvec = p.unsqueeze(-1) * f_i  # [ndihedrals, n_conf, 3]
         vvec = q.unsqueeze(-1) * f_l  # [ndihedrals, n_conf, 3]
         svec = uvec - vvec  # [ndihedrals, n_conf, 3]
-        f_j = (f_i - svec)  # [ndihedrals, n_conf, 3]
-        f_k = (f_l + svec)  # [ndihedrals, n_conf, 3]
+        f_j = f_i - svec  # [ndihedrals, n_conf, 3]
+        f_k = f_l + svec  # [ndihedrals, n_conf, 3]
     else:
         f_i = f_j = f_k = f_l = torch.zeros_like(r0)
 
     return phi, f_i, -f_j, -f_k, f_l
 
 
-def to_dense_batch(x: Tensor, batch: Tensor, fill_value=0., fill_rand=False, need_mask=False):
+def dihedral_jacobian(coords: torch.Tensor, torsion_ids: torch.LongTensor):
+    torsion_ids = torsion_ids.long()  # [bs, 4]
+    cc = [coords[torsion_ids[:, i]].unsqueeze(-2) for i in range(torsion_ids.shape[1])]
+    cc = torch.concat(cc, dim=-2)
+    ccs = [cc[:, :, i] for i in range(torsion_ids.shape[1])]
+    phi, f_i, f_j, f_k, f_l = get_dihedral_angle_vec(*ccs)
+    jac = torch.zeros_like(coords)  # [natoms, nconfs, 3]
+    jac.scatter_add_(0, torsion_ids[:, 0].unsqueeze(-1).unsqueeze(-1).expand(-1, coords.shape[1], 3), f_i)
+    jac.scatter_add_(0, torsion_ids[:, 1].unsqueeze(-1).unsqueeze(-1).expand(-1, coords.shape[1], 3), f_j)
+    jac.scatter_add_(0, torsion_ids[:, 2].unsqueeze(-1).unsqueeze(-1).expand(-1, coords.shape[1], 3), f_k)
+    jac.scatter_add_(0, torsion_ids[:, 3].unsqueeze(-1).unsqueeze(-1).expand(-1, coords.shape[1], 3), f_l)
+    return phi, jac
+
+
+def to_dense_batch(x: Tensor, batch: Tensor, fill_value=0.0, fill_rand=False, need_mask=False):
     """
     modified from https://github.com/pyg-team/pytorch_geometric/blob/2.6.1/torch_geometric/utils/_to_dense_batch.py
 
@@ -194,7 +223,7 @@ def to_dense_batch(x: Tensor, batch: Tensor, fill_value=0., fill_rand=False, nee
     """
 
     batch_size = int(batch.max()) + 1
-    num_nodes = scatter(batch.new_ones(x.size(0)), batch, dim=0, dim_size=batch_size, reduce='sum')  # [n_batch]
+    num_nodes = scatter(batch.new_ones(x.size(0)), batch, dim=0, dim_size=batch_size, reduce="sum")  # [n_batch]
     cum_nodes = cumsum(num_nodes)
 
     max_num_nodes = int(num_nodes.max())

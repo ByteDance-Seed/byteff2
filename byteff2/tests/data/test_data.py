@@ -19,10 +19,11 @@ import random
 import h5py
 import torch
 
+from byteff2.bytemol.core import Molecule
+from byteff2.bytemol.utils import get_data_file_path
 from byteff2.data.data import ClusterData, GraphData, MonoData
-from byteff2.utils.definitions import MMTERM_WIDTH, MMTerm
-from bytemol.core import Molecule
-from bytemol.utils import get_data_file_path
+from byteff2.utils.definitions import MMTerm, MMTERM_WIDTH
+
 
 logger = logging.getLogger(__name__)
 
@@ -46,41 +47,58 @@ def test_graph_data():
         data = GraphData(name, smiles)
 
         assert data.mol_name == mol.name
-        assert data.get_count('node') == mol.natoms
-        assert data.get_count('edge') == len(mol.get_bonds()) * 2
+        assert data.get_count("node") == mol.natoms
+        assert data.get_count("edge") == len(mol.get_bonds()) * 2
         assert data.node_features.shape == (mol.natoms, 5)
-        assert data.edge_features.shape == (data.get_count('edge'), 2)
+        assert data.edge_features.shape == (data.get_count("edge"), 2)
 
         for term in MMTerm:
-            assert data[f'inc_node_{term.name}'].shape[0] == data[f'inc_edge_{term.name}'].shape[0] == data.get_count(
-                term.name)
-            assert data[f'inc_node_{term.name}'].shape[1] == data[f'inc_edge_{term.name}'].shape[1] + 1 == MMTERM_WIDTH[
-                term]
+            assert (
+                data[f"inc_node_{term.name}"].shape[0]
+                == data[f"inc_edge_{term.name}"].shape[0]
+                == data.get_count(term.name)
+            )
+            assert (
+                data[f"inc_node_{term.name}"].shape[1]
+                == data[f"inc_edge_{term.name}"].shape[1] + 1
+                == MMTERM_WIDTH[term]
+            )
 
-        assert data.inc_node_nonbonded14.shape == (data.get_count('nonbonded14'), 2)
-        assert data.inc_node_nonbonded_all.shape == (data.get_count('nonbonded_all'), 2)
+        assert data.inc_node_nonbonded14.shape == (data.get_count("nonbonded14"), 2)
+        assert data.inc_node_nonbonded_all.shape == (data.get_count("nonbonded_all"), 2)
+
+
+def test_graph_data_canonical_resoner_changes_mapped_smiles():
+
+    smiles = "[C:1]([C:2]([O-:3])=[N+:4]([H:8])[H:9])([H:5])([H:6])[H:7]"
+
+    data_without_resoner = GraphData("amide_like", smiles, use_canonical_resoner=False)
+    data_with_resoner = GraphData("amide_like", smiles, use_canonical_resoner=True)
+
+    assert data_without_resoner.mapped_smiles == "[C:1]([C:2]([O-:3])=[N+:4]([H:8])[H:9])([H:5])([H:6])[H:7]"
+    assert data_with_resoner.mapped_smiles == "[C:1]([C:2](=[O:3])[N:4]([H:8])[H:9])([H:5])([H:6])[H:7]"
+    assert data_without_resoner.mapped_smiles != data_with_resoner.mapped_smiles
 
 
 def test_momo_data():
 
-    h5_file = h5py.File(mono_hdf5_fp, 'r')
+    h5_file = h5py.File(mono_hdf5_fp, "r")
 
     for max_n_confs in [5, 20]:
-
         for name, smiles in mono_name_smiles.items():
             mol = Molecule.from_mapped_smiles(smiles, name=name)
             dataset = h5_file[name]
 
-            data = MonoData(name,
-                            smiles,
-                            confdata=dict(coords=dataset['coords'][:],
-                                          energy=dataset['energy'][:],
-                                          forces=dataset['forces'][:]),
-                            max_n_confs=max_n_confs)
+            data = MonoData(
+                name,
+                smiles,
+                confdata=dict(coords=dataset["coords"][:], energy=dataset["energy"][:], forces=dataset["forces"][:]),
+                max_n_confs=max_n_confs,
+            )
 
             assert data.mol_name == mol.name
-            assert data.get_count('node') == mol.natoms
-            assert data.get_count('edge') == len(mol.get_bonds()) * 2
+            assert data.get_count("node") == mol.natoms
+            assert data.get_count("edge") == len(mol.get_bonds()) * 2
 
             assert data.coords.shape == (mol.natoms, max_n_confs, 3)
             assert data.forces.shape == (mol.natoms, max_n_confs, 3)
@@ -91,7 +109,7 @@ def test_momo_data():
 
 def test_from_dict():
 
-    h5_file = h5py.File(mono_hdf5_fp, 'r')
+    h5_file = h5py.File(mono_hdf5_fp, "r")
 
     max_n_confs = 20
 
@@ -101,11 +119,12 @@ def test_from_dict():
 
     dataset = h5_file[name]
 
-    data = MonoData(name,
-                    smiles,
-                    confdata=dict(coords=dataset['coords'][:], energy=dataset['energy'][:],
-                                  forces=dataset['forces'][:]),
-                    max_n_confs=max_n_confs)
+    data = MonoData(
+        name,
+        smiles,
+        confdata=dict(coords=dataset["coords"][:], energy=dataset["energy"][:], forces=dataset["forces"][:]),
+        max_n_confs=max_n_confs,
+    )
 
     new_data = MonoData.from_dict(dict(data))
     for k, v in data.items():
@@ -115,7 +134,7 @@ def test_from_dict():
         elif isinstance(v, torch.Tensor):
             assert (v == new_data[k]).all(), k
         else:
-            raise TypeError(f'Unknow type of {k}: {type(v)}')
+            raise TypeError(f"Unknow type of {k}: {type(v)}")
 
     h5_file.close()
 
@@ -124,32 +143,34 @@ def test_cluster_data():
 
     max_n_confs = 10
 
-    h5_file = h5py.File(dimer_hdf5_fp, 'r')
+    h5_file = h5py.File(dimer_hdf5_fp, "r")
     for name, smiles in dimer_name_smiles.items():
         print(smiles)
         dataset = h5_file[name]
-        data = ClusterData(name,
-                           mapped_smiles=smiles,
-                           max_n_confs=max_n_confs,
-                           confdata=dict(
-                               coords=dataset['coords'],
-                               forces_cluster=dataset['forces_cluster'],
-                               energy_cluster=dataset['energy_cluster'],
-                           ))
+        data = ClusterData(
+            name,
+            mapped_smiles=smiles,
+            max_n_confs=max_n_confs,
+            confdata=dict(
+                coords=dataset["coords"],
+                forces_cluster=dataset["forces_cluster"],
+                energy_cluster=dataset["energy_cluster"],
+            ),
+        )
 
         mols = [Molecule.from_mapped_smiles(s) for s in smiles]
 
         n_node, n_edge = 0, 0
         for i, mol in enumerate(mols):
-            assert data.get_count('node', idx=i) == mol.natoms
-            assert data.get_count('edge', idx=i) == len(mol.get_bonds()) * 2
+            assert data.get_count("node", idx=i) == mol.natoms
+            assert data.get_count("edge", idx=i) == len(mol.get_bonds()) * 2
             n_node += mol.natoms
             n_edge += len(mol.get_bonds()) * 2
 
-        assert data.get_count('node', cluster=True) == n_node
-        assert data.get_count('edge', cluster=True) == n_edge
-        assert data.get_count('nonbonded14', cluster=True) == data.get_count('nonbonded14', idx=None).sum().item()
-        assert data.get_count('nonbonded_all', cluster=True) > data.get_count('nonbonded14', idx=None).sum().item()
+        assert data.get_count("node", cluster=True) == n_node
+        assert data.get_count("edge", cluster=True) == n_edge
+        assert data.get_count("nonbonded14", cluster=True) == data.get_count("nonbonded14", idx=None).sum().item()
+        assert data.get_count("nonbonded_all", cluster=True) > data.get_count("nonbonded14", idx=None).sum().item()
 
         assert data.coords.shape == (n_node, max_n_confs, 3)
         assert data.forces_cluster.shape == (n_node, max_n_confs, 3)
@@ -160,7 +181,7 @@ def test_cluster_nonbonded():
 
     natoms = 5
     nmols = 4
-    data = ClusterData('test', mapped_smiles=['[C:1]([H:2])([H:3])([H:4])[H:5]'] * nmols)
+    data = ClusterData("test", mapped_smiles=["[C:1]([H:2])([H:3])([H:4])[H:5]"] * nmols)
     nonbonded_all_cluster = data.inc_node_nonbonded_all_cluster.tolist()
     for i in range(natoms * nmols):
         for j in range(natoms * nmols):

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+from itertools import permutations
 import logging
 from operator import itemgetter
 
@@ -20,10 +21,12 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from byteff2.utils.definitions import ELEMENT_MAP, MAX_RING_SIZE, MM_TOPO_MAP, MMTERM_WIDTH, BondOrder, MMTerm
+from byteff2.bytemol.core import Conformer, Molecule, MoleculeGraph, rkutil
+from byteff2.bytemol.core.rkutil import get_canonical_resoner
+from byteff2.bytemol.toolkit.infer_molecule import check_broken_bonds, check_new_bonds
+from byteff2.utils.definitions import BondOrder, MAX_RING_SIZE, MM_TOPO_MAP, MMTerm, MMTERM_WIDTH
 from byteff2.utils.mol_utils import find_equivalent_index, get_ring_info, match_linear_proper
-from bytemol.core import Conformer, Molecule, MoleculeGraph, rkutil
-from bytemol.toolkit.infer_molecule import check_broken_bonds, check_new_bonds
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,20 @@ def fake_coords(n_node, n_conf):
 
 
 _count_names = [
-    'node', 'edge', 'bond', 'angle', 'proper', 'improper', 'nonbonded14', 'nonbonded_all', 'mol', 'nonbonded12',
-    'nonbonded13', 'nonbonded15'
+    "node",
+    "edge",
+    "bond",
+    "angle",
+    "proper",
+    "improper",
+    "nonbonded14",
+    "nonbonded_all",
+    "mol",
+    "nonbonded12",
+    "nonbonded13",
+    "nonbonded15",
+    "partial_hessian",
+    "torsion_ids",
 ]
 _count_idx = {name: idx for idx, name in enumerate(_count_names)}
 
@@ -50,7 +65,7 @@ _count_idx = {name: idx for idx, name in enumerate(_count_names)}
 class Data(dict[str, Tensor]):
     """
     Data is a dict containing features, most of which are Tensors.
-    
+
     If one key is start by 'inc_{name}_', its value contains {name} indices and
       should be increased by the cummulation of counts[COUNT_IDX[name]] when collating.
 
@@ -67,13 +82,15 @@ class Data(dict[str, Tensor]):
         else:
             super(Data).__getattr__(name)
 
-    def __init__(self,
-                 moldata: dict[str, np.ndarray] = None,
-                 confdata: dict[str, np.ndarray] = None,
-                 max_n_confs: int = 10,
-                 int_dtype=torch.int32,
-                 float_dtype=torch.float32,
-                 **kwargs):
+    def __init__(
+        self,
+        moldata: dict[str, np.ndarray] = None,
+        confdata: dict[str, np.ndarray] = None,
+        max_n_confs: int = 10,
+        int_dtype=torch.int32,
+        float_dtype=torch.float32,
+        **kwargs,
+    ):
         super().__init__()
         self.counts = torch.tensor([0] * len(_count_names), dtype=int_dtype).reshape(1, -1)
         self.counts_cluster = torch.tensor([0] * len(_count_names), dtype=int_dtype).reshape(1, -1)
@@ -85,10 +102,10 @@ class Data(dict[str, Tensor]):
                 elif isinstance(v, np.ndarray):
                     self[k] = torch.tensor(v, dtype=float_dtype)
                 else:
-                    raise ValueError(f'unknown kwargs {k}, {v}')
+                    raise ValueError(f"unknown kwargs {k}, {v}")
 
         if confdata is not None:
-            coords = confdata.pop('coords')
+            coords = confdata.pop("coords")
             _coords = torch.tensor(coords, dtype=float_dtype).transpose(0, 1)  # [n_node, n_conf, 3]
             _confdata: dict[str, Tensor] = {}
             if confdata is not None:
@@ -97,8 +114,9 @@ class Data(dict[str, Tensor]):
                     if _confdata[k].dim() == 1:
                         _confdata[k] = _confdata[k].reshape(-1, 1)
                     _confdata[k] = _confdata[k].transpose(0, 1)  # [?, n_conf, ...]
-                    assert _confdata[k].size(1) == _coords.size(
-                        1), f'{k} {_confdata[k].size()}, coords {_coords.size()}'
+                    assert _confdata[k].size(1) == _coords.size(1), (
+                        f"{k} {_confdata[k].size()}, coords {_coords.size()}"
+                    )
 
             n_node, n_conf = _coords.shape[0], _coords.shape[1]
             confmask = torch.ones(max_n_confs)  # [n_conf]
@@ -109,13 +127,13 @@ class Data(dict[str, Tensor]):
                     _confdata[k] = _confdata[k][:, idx]
             else:
                 # padding confs
-                confmask[n_conf:] = 0.
+                confmask[n_conf:] = 0.0
                 pad_coords = fake_coords(n_node, max_n_confs - n_conf)
                 _coords = torch.concat([_coords, pad_coords], dim=1)  # [n_node, n_conf, 3]
-                for k in _confdata:
-                    ss = list(_confdata[k].size())
-                    pad_values = _confdata[k].new_zeros([ss[0], max_n_confs - n_conf] + ss[2:])
-                    _confdata[k] = torch.concat([_confdata[k], pad_values], dim=1)  # [?, n_conf, ...]
+                for k, v in _confdata.items():
+                    ss = list(v.size())
+                    pad_values = v.new_zeros([ss[0], max_n_confs - n_conf] + ss[2:])
+                    _confdata[k] = torch.concat([v, pad_values], dim=1)  # [?, n_conf, ...]
 
             self.confmask = confmask.unsqueeze(0)
             self.coords = _coords
@@ -196,38 +214,43 @@ class GraphData(Data):
     - inc_edge_improper: IntTensor  # [n_improper, 3]
     """
 
-    def __init__(self,
-                 name: str = '',
-                 mapped_smiles: str = '',
-                 record_nonbonded_all=True,
-                 int_dtype=torch.int32,
-                 float_dtype=torch.float32,
-                 mol=None,
-                 **kwargs):
+    def __init__(
+        self,
+        name: str = "",
+        mapped_smiles: str = "",
+        record_nonbonded_all=True,
+        int_dtype=torch.int32,
+        float_dtype=torch.float32,
+        mol=None,
+        use_canonical_resoner=True,
+        **kwargs,
+    ):
         super().__init__(int_dtype=int_dtype, float_dtype=float_dtype, **kwargs)
 
         if not mapped_smiles:
             return
 
+        special_atoms = set()  # store indices of hypervalent P/S atoms
         mol = Molecule.from_mapped_smiles(mapped_smiles, name=name) if mol is None else mol
-        pf6_flag = mol.get_smiles() == 'F[P-](F)(F)(F)(F)F'
-        if pf6_flag:
-            if mol.atomic_numbers[0] == 15:
-                pf6_flag = 1
-            elif mol.atomic_numbers[1] == 15:
-                pf6_flag = 2
-            else:
-                raise RuntimeError("P should be the first or second atom in PF6")
+
+        if use_canonical_resoner:
+            rkmol = get_canonical_resoner(mol.get_rkmol())
+            mol = Molecule.from_rdkit(rkmol)
+
+        for atom in mol.rkmol.GetAtoms():
+            deg = atom.GetDegree()
+            if deg >= 5 and atom.GetAtomicNum() in [15, 16]:
+                special_atoms.add(atom.GetIdx())
         self.mol_name = name
         self.mapped_smiles = mol.get_mapped_smiles(isomeric=False)
-        self.set_count('mol', 1)
+        self.set_count("mol", 1)
 
         graph = MoleculeGraph(mol, max_include_ring=MAX_RING_SIZE)
         topos = graph.get_intra_topo()
-        topos['ImproperTorsion'] = get_impropers(graph)
+        topos["ImproperTorsion"] = get_impropers(graph)
 
         # node features
-        atom_type = torch.tensor([ELEMENT_MAP[i] for i in mol.atomic_numbers], dtype=int_dtype)
+        atom_type = torch.tensor([a - 1 for a in mol.atomic_numbers], dtype=int_dtype)
         connectivity = torch.tensor([atom.connectivity for atom in graph.get_atoms()], dtype=int_dtype)
         formal_charge_vec = torch.tensor(mol.formal_charges, dtype=int_dtype)
         ring_con, min_ring_size = get_ring_info(graph)
@@ -235,14 +258,14 @@ class GraphData(Data):
         min_ring_size = torch.tensor(min_ring_size, dtype=int_dtype)
         features = torch.vstack([atom_type, connectivity, formal_charge_vec, ring_con, min_ring_size]).T
         self.node_features = features  # [n_node, 5]
-        self.set_count('node', mol.natoms)
-        assert self.get_count('node') == self.node_features.shape[0]
+        self.set_count("node", mol.natoms)
+        assert self.get_count("node") == self.node_features.shape[0]
 
         # edge features
         bond_orders = list(BondOrder)
         edge_idx_dict = {}
         edge_features = []
-        for i, atomidx in enumerate(topos['Bond']):
+        for i, atomidx in enumerate(topos["Bond"]):
             edge_idx_dict[atomidx] = 2 * i
             edge_idx_dict[atomidx[::-1]] = 2 * i + 1
             bond = graph.get_bond(*atomidx)
@@ -254,15 +277,8 @@ class GraphData(Data):
         # topological indecies
         for term, width in MMTERM_WIDTH.items():
             atomidxs = topos[MM_TOPO_MAP[term]]
-            if pf6_flag and term is MMTerm.angle:
-                if pf6_flag == 1:
-                    atomidxs = [(1, 0, 2), (1, 0, 3), (1, 0, 5), (1, 0, 6), (2, 0, 3), (2, 0, 4), (2, 0, 6), (3, 0, 4),
-                                (3, 0, 5), (4, 0, 5), (4, 0, 6), (5, 0, 6)]
-                else:
-                    atomidxs = [(0, 1, 2), (0, 1, 3), (0, 1, 5), (0, 1, 6), (2, 1, 3), (2, 1, 4), (2, 1, 6), (3, 1, 4),
-                                (3, 1, 5), (4, 1, 5), (4, 1, 6), (5, 1, 6)]
             index = torch.tensor(atomidxs, dtype=int_dtype).reshape(-1, width)
-            self[f'inc_node_{term.name}'] = index
+            self[f"inc_node_{term.name}"] = index
             self.set_count(term.name, len(atomidxs))
             edge_indices = []
             for ids in atomidxs:
@@ -271,18 +287,40 @@ class GraphData(Data):
                     if term is not MMTerm.improper:
                         eid = edge_idx_dict[(ids[i], ids[i + 1])]
                     else:
-                        eid = edge_idx_dict[((ids[0], ids[i + 1]))]
+                        eid = edge_idx_dict[(ids[0], ids[i + 1])]
                     eids.append(eid)
                 edge_indices.append(eids)
-            self[f'inc_edge_{term.name}'] = torch.tensor(edge_indices, dtype=int_dtype).reshape(-1, width - 1)
+            self[f"inc_edge_{term.name}"] = torch.tensor(edge_indices, dtype=int_dtype).reshape(-1, width - 1)
         bond_idx = self.inc_node_bond
         self.inc_node_edge = torch.concat([bond_idx, bond_idx.flip(-1)], dim=-1).reshape(-1, 2)
-        self.set_count('edge', self.inc_node_edge.shape[0])
+        self.set_count("edge", self.inc_node_edge.shape[0])
 
-        self.pf6_bond_mask = torch.ones(6, dtype=float_dtype) if pf6_flag else torch.zeros(self.inc_node_bond.shape[0],
-                                                                                           dtype=float_dtype)
-        self.pf6_angle_mask = torch.ones(12, dtype=float_dtype) if pf6_flag else torch.zeros(
-            self.inc_node_angle.shape[0], dtype=float_dtype)
+        # create masks for bonded terms related to special atoms:
+        # bonds: any endpoint is special; angles: the central atom is special;
+        # torsions/impropers: any participating atom is special.
+        bond_mask = torch.zeros(self.inc_node_bond.shape[0], dtype=float_dtype)
+        for i, bond_atoms in enumerate(self.inc_node_bond):
+            if bond_atoms[0].item() in special_atoms or bond_atoms[1].item() in special_atoms:
+                bond_mask[i] = 1.0
+        self.patch_bond_mask = bond_mask
+
+        angle_mask = torch.zeros(self.inc_node_angle.shape[0], dtype=float_dtype)
+        for i, angle_atoms in enumerate(self.inc_node_angle):
+            if angle_atoms[1].item() in special_atoms:
+                angle_mask[i] = 1.0
+        self.patch_angle_mask = angle_mask
+
+        proper_mask_patch = torch.zeros(self.inc_node_proper.shape[0], dtype=float_dtype)
+        for i, proper_atoms in enumerate(self.inc_node_proper):
+            if any(idx.item() in special_atoms for idx in proper_atoms):
+                proper_mask_patch[i] = 1.0
+        self.patch_proper_mask = proper_mask_patch
+
+        improper_mask_patch = torch.zeros(self.inc_node_improper.shape[0], dtype=float_dtype)
+        for i, improper_atoms in enumerate(self.inc_node_improper):
+            if any(idx.item() in special_atoms for idx in improper_atoms):
+                improper_mask_patch[i] = 1.0
+        self.patch_improper_mask = improper_mask_patch
 
         # equivalent
         atom_equi_index, edge_equi_index = find_equivalent_index(mol, self.inc_node_edge.tolist())
@@ -294,35 +332,114 @@ class GraphData(Data):
         nb14 = graph.topo.nonbonded14_pairs
         nb15 = graph.topo.nonbonded15_pairs
         self.inc_node_nonbonded12 = torch.tensor(nb12, dtype=int_dtype).reshape(-1, 2)
-        self.set_count('nonbonded12', self.inc_node_nonbonded12.shape[0])
+        self.set_count("nonbonded12", self.inc_node_nonbonded12.shape[0])
         self.inc_node_nonbonded13 = torch.tensor(nb13, dtype=int_dtype).reshape(-1, 2)
-        self.set_count('nonbonded13', self.inc_node_nonbonded13.shape[0])
+        self.set_count("nonbonded13", self.inc_node_nonbonded13.shape[0])
         self.inc_node_nonbonded14 = torch.tensor(nb14, dtype=int_dtype).reshape(-1, 2)
-        self.set_count('nonbonded14', self.inc_node_nonbonded14.shape[0])
+        self.set_count("nonbonded14", self.inc_node_nonbonded14.shape[0])
         self.inc_node_nonbonded15 = torch.tensor(nb15, dtype=int_dtype).reshape(-1, 2)
-        self.set_count('nonbonded15', self.inc_node_nonbonded15.shape[0])
+        self.set_count("nonbonded15", self.inc_node_nonbonded15.shape[0])
 
         # nonbonded all
         if record_nonbonded_all:
             nball = graph.topo.nonbondedall_pairs
             self.inc_node_nonbonded_all = torch.tensor(nball, dtype=int_dtype).reshape(-1, 2)
-            self.set_count('nonbonded_all', self.inc_node_nonbonded_all.shape[0])
+            self.set_count("nonbonded_all", self.inc_node_nonbonded_all.shape[0])
 
         # mask linear proper
         matches = match_linear_proper(mol)
-        mask = torch.ones(self.get_count('proper'), dtype=float_dtype)
+        mask = torch.ones(self.get_count("proper"), dtype=float_dtype)
         for i, atomidx in enumerate(self.inc_node_proper):
             at = tuple(atomidx.tolist())
             if at in matches:
-                mask[i] = 0.
+                mask[i] = 0.0
         self.proper_mask = mask
 
 
+class HessianData(GraphData):
+    """
+    Data containing gaff2 parameters and hessian data
+    """
+
+    def __init__(
+        self,
+        name: str = "",
+        mapped_smiles: str = "",
+        moldata: dict[str, np.ndarray] = None,
+        confdata: dict[str, np.ndarray] = None,
+        max_n_confs: int = 10,
+        record_nonbonded_all=True,
+        int_dtype=torch.int32,
+        float_dtype=torch.float32,
+        mol=None,
+    ):
+        hessian = None
+        if confdata and "hessian" in confdata:
+            hessian = torch.tensor(confdata.pop("hessian"), dtype=float_dtype)
+            # If hessian is 2D (3*n_atoms, 3*n_atoms), add confs dimension for THEMol dataset.
+            if hessian.dim() == 2:
+                hessian = hessian.unsqueeze(0)
+        super().__init__(
+            name=name,
+            mapped_smiles=mapped_smiles,
+            record_nonbonded_all=record_nonbonded_all,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            moldata=moldata,
+            confdata=confdata,
+            max_n_confs=max_n_confs,
+            mol=mol,
+        )
+        if not mapped_smiles or hessian is None:
+            return
+        partial_hessians = []
+        ids_hessian_map = {}
+        nconfs = hessian.shape[0]
+        for term in [MMTerm.bond, MMTerm.angle, MMTerm.proper, MMTerm.improper]:
+            width = MMTERM_WIDTH[term]
+            rec = [[[] for _ in range(width)] for _ in range(width)]
+            choices = list(permutations(range(width), 2))
+            indices = self[f"inc_node_{term.name}"].tolist()
+            for ids in indices:
+                for i, j in choices:
+                    if abs(i - j) >= 3 and term is MMTerm.proper:
+                        # In 4-members rings, 1-4 interaction of proper torsions should be taken into consideration.
+                        # We omit this term for simplicity, which could result in an error of ~1 kcal/mol/A^2.
+                        continue
+                    a0, a1 = ids[i], ids[j]
+                    if (a0, a1) not in ids_hessian_map:
+                        ids_hessian_map[(a0, a1)] = len(partial_hessians)
+                        partial_hessians.append(
+                            hessian[:, a0 * 3 : a0 * 3 + 3, a1 * 3 : a1 * 3 + 3].reshape(nconfs, -1)
+                        )
+                    rec[i][j].append(ids_hessian_map[(a0, a1)])
+            for i in range(width):
+                for j in range(width):
+                    if i == j:
+                        continue
+                    if abs(i - j) >= 3 and term is MMTerm.proper:
+                        continue
+                    rec_ij = torch.tensor(rec[i][j], dtype=int_dtype)
+                    assert len(rec_ij) == self.get_count(term.name), (
+                        f"{term.name}, {len(rec_ij)} != {self.get_count(term.name)}"
+                    )
+                    self[f"{term.name}_rec_{i}_{j}"] = rec_ij
+        if not partial_hessians:
+            # For single-atom molecules or molecules without any topological terms,
+            # partial_hessians can be empty. Construct an empty tensor of shape
+            # (0, nconfs, 9) to avoid torch.concat raising a RuntimeError.
+            partial_hessians = torch.empty((0, nconfs, 9), dtype=float_dtype)
+        else:
+            partial_hessians = torch.concat([p.unsqueeze(0) for p in partial_hessians], dim=0)
+        self["partial_hessian"] = partial_hessians
+        self.set_count("partial_hessian", partial_hessians.shape[0])
+
+
 class MonoData(GraphData):
-    """"
+    """ "
     Data containing one molecule
 
-    3D features & labels: 
+    3D features & labels:
     - coords: FloatTensor  # [n_node, n_confs, 3]
     - forces: FloatTensor  # [n_node, n_confs, 3]
     - energy: FloatTensor  # [1, n_conf]
@@ -339,7 +456,7 @@ class MonoData(GraphData):
 
         coords0 = coords.unsqueeze(0).repeat((coords.shape[0], 1, 1, 1))
         coords1 = coords0.transpose(0, 1)  # [n_node, n_node, n_conf, 3]
-        r2 = torch.min(torch.sum((coords1 - coords0)**2, dim=-1), dim=-1)[0]
+        r2 = torch.min(torch.sum((coords1 - coords0) ** 2, dim=-1), dim=-1)[0]
         ii, jj = torch.where(r2 <= cutoff**2)
 
         edge3d = []
@@ -349,32 +466,36 @@ class MonoData(GraphData):
             edge3d.append([i, j])
         return edge3d
 
-    def set_edge_3d(self, edge3d_rcut=5.):
-        coords = self.coords[:, self.confmask[0] > 0.]
+    def set_edge_3d(self, edge3d_rcut=5.0):
+        coords = self.coords[:, self.confmask[0] > 0.0]
         edge3d = self.get_edge_3d(coords, self.inc_node_edge, edge3d_rcut)
         self.inc_node_edge3d = torch.tensor(edge3d, dtype=self.inc_node_edge.dtype).reshape(-1, 2)
 
-    def __init__(self,
-                 name: str = '',
-                 mapped_smiles: str = '',
-                 moldata: dict[str, np.ndarray] = None,
-                 confdata: dict[str, np.ndarray] = None,
-                 max_n_confs: int = 10,
-                 edge3d_rcut=5.,
-                 record_nonbonded_all=True,
-                 int_dtype=torch.int32,
-                 float_dtype=torch.float32,
-                 check_bond=False,
-                 mol=None):
-        super().__init__(name=name,
-                         mapped_smiles=mapped_smiles,
-                         record_nonbonded_all=record_nonbonded_all,
-                         int_dtype=int_dtype,
-                         float_dtype=float_dtype,
-                         moldata=moldata,
-                         confdata=confdata,
-                         max_n_confs=max_n_confs,
-                         mol=mol)
+    def __init__(
+        self,
+        name: str = "",
+        mapped_smiles: str = "",
+        moldata: dict[str, np.ndarray] = None,
+        confdata: dict[str, np.ndarray] = None,
+        max_n_confs: int = 10,
+        edge3d_rcut=5.0,
+        record_nonbonded_all=True,
+        int_dtype=torch.int32,
+        float_dtype=torch.float32,
+        check_bond=False,
+        mol=None,
+    ):
+        super().__init__(
+            name=name,
+            mapped_smiles=mapped_smiles,
+            record_nonbonded_all=record_nonbonded_all,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            moldata=moldata,
+            confdata=confdata,
+            max_n_confs=max_n_confs,
+            mol=mol,
+        )
 
         if not mapped_smiles:
             return
@@ -386,10 +507,13 @@ class MonoData(GraphData):
                 if self.confmask[0, iconf] > 1e-2:
                     mol.conformers[0].coords = self.coords[:, iconf].numpy()
                     if check_new_bonds(mol) or check_broken_bonds(mol):
-                        self.confmask[0, iconf] = 0.
+                        self.confmask[0, iconf] = 0.0
 
-        if 'coords' in self:
+        if "coords" in self:
             self.set_edge_3d(edge3d_rcut=edge3d_rcut)
+
+        if "torsion_ids" in self:
+            self.inc_node_torsion_ids = self.torsion_ids.clone().detach().to(int_dtype)
 
 
 def collate_data(data_list: list[Data]):
@@ -399,16 +523,19 @@ def collate_data(data_list: list[Data]):
 
     def collate_tensor(k: str, vs: list[Tensor], incs: dict[str, Tensor], cluster: bool):
         cat_vs = torch.concat(vs, dim=0)
-        if k.startswith('inc_'):
-            inc_name = k.split('_')[1]
+        if k.startswith("inc_"):
+            inc_name = k.split("_")[1]
             if inc_name in incs:
                 inc = incs[inc_name]
             else:
-                inc = torch.tensor([data.get_count(inc_name, cluster=cluster) for data in data_list],
-                                   device=vs[0].device,
-                                   dtype=vs[0].dtype)
+                inc = torch.tensor(
+                    [data.get_count(inc_name, cluster=cluster) for data in data_list],
+                    device=vs[0].device,
+                    dtype=vs[0].dtype,
+                )
                 inc = torch.concat(
-                    (torch.tensor([0], device=vs[0].device, dtype=vs[0].dtype), torch.cumsum(inc, 0)[:-1]), dim=0)
+                    (torch.tensor([0], device=vs[0].device, dtype=vs[0].dtype), torch.cumsum(inc, 0)[:-1]), dim=0
+                )
                 incs[inc_name] = inc
             nums = torch.tensor([v.shape[0] for v in vs], dtype=vs[0].dtype, device=vs[0].device)
             size = (-1,) + (1,) * (vs[0].dim() - 1)
@@ -417,13 +544,14 @@ def collate_data(data_list: list[Data]):
 
     cat_data = Data()
     data0 = data_list[0]
-    cluster = 'inc_node_nonbonded_all_cluster' in data0
+    cluster = "inc_node_nonbonded_all_cluster" in data0
     incs = {}
+    patch_mask_keys = {"patch_bond_mask", "patch_angle_mask", "patch_proper_mask", "patch_improper_mask"}
     for k in data0.keys():
-        if k == 'pf6_bond_mask' and (not all([k in data for data in data_list])):
-            continue
-        if k == 'pf6_angle_mask' and (not all([k in data for data in data_list])):
-            continue
+        if k in patch_mask_keys:
+            missing = [i for i, data in enumerate(data_list) if k not in data]
+            if missing:
+                raise KeyError(f"Missing required key '{k}' in batch samples indices={missing}. ")
         vs = [data[k] for data in data_list]
         if isinstance(vs[0], Tensor):
             vs = collate_tensor(k, vs, incs, cluster)
@@ -432,10 +560,10 @@ def collate_data(data_list: list[Data]):
 
 
 class ClusterData(Data):
-    """"
+    """ "
     Data containing multiple molecules
 
-    3D features & labels: 
+    3D features & labels:
     - coords: FloatTensor  # [n_node, n_confs, 3]
     - forces: FloatTensor  # [n_node, n_confs, 3]
     - energy: FloatTensor  # [1, n_conf]
@@ -445,78 +573,81 @@ class ClusterData(Data):
     """
 
     def init_sub_graph(self, max_n_confs, record_nonbonded_all, int_dtype, float_dtype, mapped_smiles, **kwargs):
-        coords = self.coords.transpose(0, 1).numpy() if 'coords' in self else None
+        coords = self.coords.transpose(0, 1).numpy() if "coords" in self else None
         shift = 0
         graph_list = []
         for i, mps in enumerate(mapped_smiles):
             mol = Molecule.from_mapped_smiles(mps)
             na = mol.natoms
-            confdata = {'coords': coords[:, shift:shift + na]} if coords is not None else None
-            graph = MonoData(str(i),
-                             mps,
-                             confdata=confdata,
-                             record_nonbonded_all=record_nonbonded_all,
-                             max_n_confs=max_n_confs,
-                             int_dtype=int_dtype,
-                             float_dtype=float_dtype,
-                             mol=mol,
-                             **kwargs)
+            confdata = {"coords": coords[:, shift : shift + na]} if coords is not None else None
+            graph = MonoData(
+                str(i),
+                mps,
+                confdata=confdata,
+                record_nonbonded_all=record_nonbonded_all,
+                max_n_confs=max_n_confs,
+                int_dtype=int_dtype,
+                float_dtype=float_dtype,
+                mol=mol,
+                **kwargs,
+            )
             shift += na
             graph_list.append(graph)
 
         return graph_list
 
-    def __init__(self,
-                 name: str = None,
-                 mapped_smiles: list[str] = None,
-                 moldata: dict[str, np.ndarray] = None,
-                 confdata: dict[str, np.ndarray] = None,
-                 max_n_confs=10,
-                 edge3d_rcut=5.,
-                 nb_cutoff=None,
-                 record_nonbonded_all=True,
-                 int_dtype=torch.int32,
-                 float_dtype=torch.float32,
-                 **kwargs):
-        super().__init__(int_dtype=int_dtype,
-                         float_dtype=float_dtype,
-                         moldata=moldata,
-                         confdata=confdata,
-                         max_n_confs=max_n_confs)
+    def __init__(
+        self,
+        name: str = None,
+        mapped_smiles: list[str] = None,
+        moldata: dict[str, np.ndarray] = None,
+        confdata: dict[str, np.ndarray] = None,
+        max_n_confs=10,
+        edge3d_rcut=5.0,
+        nb_cutoff=None,
+        record_nonbonded_all=True,
+        int_dtype=torch.int32,
+        float_dtype=torch.float32,
+        **kwargs,
+    ):
+        super().__init__(
+            int_dtype=int_dtype, float_dtype=float_dtype, moldata=moldata, confdata=confdata, max_n_confs=max_n_confs
+        )
 
         self.name = name
 
         if not mapped_smiles:
             return
 
-        graph_list = self.init_sub_graph(max_n_confs, record_nonbonded_all, int_dtype, float_dtype, mapped_smiles,
-                                         **kwargs)
+        graph_list = self.init_sub_graph(
+            max_n_confs, record_nonbonded_all, int_dtype, float_dtype, mapped_smiles, **kwargs
+        )
         graphs = collate_data(graph_list)
         for k, v in graphs.items():
-            if k == 'confmask':
+            if k == "confmask":
                 continue
             self[k] = v
-        natoms = self.get_count('node', idx=None).tolist()
+        natoms = self.get_count("node", idx=None).tolist()
         nonbonded_all_inter = []
         if nb_cutoff is None:
             for imol, n in enumerate(natoms[:-1]):
                 shift_i = sum(natoms[:imol])
-                shift_j = sum(natoms[:imol + 1])
+                shift_j = sum(natoms[: imol + 1])
                 for i in range(n):
-                    for j in range(sum(natoms[imol + 1:])):
+                    for j in range(sum(natoms[imol + 1 :])):
                         nonbonded_all_inter.append([i + shift_i, j + shift_j])
         else:
             assert max_n_confs == 1
             coords = self.coords[:, 0]
             cutoff2 = nb_cutoff**2
-            cutoff2_l = (nb_cutoff + 10.)**2
+            cutoff2_l = (nb_cutoff + 10.0) ** 2
             mask = (coords.unsqueeze(0) - coords.unsqueeze(1)).square().sum(dim=-1) < cutoff2
             for imol, n in enumerate(natoms[:-1]):
                 shift_i = sum(natoms[:imol])
-                cc_i = coords[shift_i:shift_i + natoms[imol]].mean(dim=0)
+                cc_i = coords[shift_i : shift_i + natoms[imol]].mean(dim=0)
                 for jmol in range(imol + 1, len(natoms)):
                     shift_j = sum(natoms[:jmol])
-                    cc_j = coords[shift_j:shift_j + natoms[jmol]].mean(dim=0)
+                    cc_j = coords[shift_j : shift_j + natoms[jmol]].mean(dim=0)
                     d2 = (cc_i - cc_j).square().sum()
                     if d2 > cutoff2_l:
                         continue
@@ -530,8 +661,8 @@ class ClusterData(Data):
         nonbonded_all_inter = torch.tensor(nonbonded_all_inter, dtype=int_dtype).reshape(-1, 2)
         self.inc_node_nonbonded_all_cluster = torch.concat((self.inc_node_nonbonded_all, nonbonded_all_inter), dim=0)
         self.counts_cluster = torch.sum(self.counts, dim=0, keepdim=True)
-        self.set_count('nonbonded_all', self.inc_node_nonbonded_all_cluster.shape[0], cluster=True)
+        self.set_count("nonbonded_all", self.inc_node_nonbonded_all_cluster.shape[0], cluster=True)
 
-        if hasattr(self, 'confmask'):
+        if hasattr(self, "confmask"):
             self.confmask_cluster = self.confmask.clone().detach()
-            self.confmask = self.confmask.repeat(self.get_count('mol', cluster=True), 1)
+            self.confmask = self.confmask.repeat(self.get_count("mol", cluster=True), 1)

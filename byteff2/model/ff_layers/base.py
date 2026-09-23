@@ -19,8 +19,8 @@ from byteff2.data import Data
 
 
 class PreFFLayer(Module):
-    """Base class for PreFFLayer, 
-        infering coordinate-invariant parameters used in FFLayer."""
+    """Base class for PreFFLayer,
+    infering coordinate-invariant parameters used in FFLayer."""
 
     def __init__(self, node_dim: int, edge_dim: int, **configs):
         super().__init__()
@@ -33,8 +33,8 @@ class PreFFLayer(Module):
 
 
 class FFLayer(Module):
-    """Base class for FFLayer, 
-        infering energy given coordinates."""
+    """Base class for FFLayer,
+    infering energy given coordinates."""
 
     def __init__(self, node_dim: int, edge_dim: int, **configs):
         super().__init__()

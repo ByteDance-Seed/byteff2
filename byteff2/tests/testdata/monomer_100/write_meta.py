@@ -16,13 +16,13 @@ import json
 from glob import glob
 from pathlib import Path
 
-meta_name = 'meta.txt'
+meta_name = "meta.txt"
 lines = []
-for json_file in glob('*.json'):
+for json_file in glob("*.json"):
     with open(json_file) as file:
         name_mps = json.load(file)
     dataset_name = Path(json_file).stem
     for name in name_mps:
-        lines.append(f'{dataset_name},{name}\n')
-with open(meta_name, 'w') as file:
+        lines.append(f"{dataset_name},{name}\n")
+with open(meta_name, "w") as file:
     file.writelines(lines)

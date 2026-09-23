@@ -22,8 +22,7 @@ from torch_geometric.nn import MLP
 from torch_geometric.utils import scatter
 
 from byteff2.data.data import ClusterData, MonoData
-from byteff2.utils.definitions import (ALPHA_FREE, C6_FREE, CHG_FACTOR, ELEMENT_MAP, RVDW_FREE, SUPPORTED_ELEMENTS,
-                                       V_FREE)
+from byteff2.utils.definitions import ALPHA_FREE, C6_FREE, CHG_FACTOR, RVDW_FREE, V_FREE
 
 from .base import FFLayer, PreFFLayer
 from .utils import get_distance_vec, reduce_counts, to_dense_batch, to_dense_index
@@ -32,38 +31,44 @@ logger = logging.getLogger(__name__)
 
 
 class PreChargeVolume(PreFFLayer):
-
     def __init__(
-            self,
-            node_dim: int,
-            edge_dim: int,
-            pre_mlp_dims=(32, 32, 3),  # (hidden, out, layers)
-            out_mlp_dims=(32, 3),  # (hidden, layers)
-            act='gelu',
-            **configs):
+        self,
+        node_dim: int,
+        edge_dim: int,
+        pre_mlp_dims=(32, 32, 3),  # (hidden, out, layers)
+        out_mlp_dims=(32, 3),  # (hidden, layers)
+        act="gelu",
+        **configs,
+    ):
         super().__init__(node_dim, edge_dim)
 
-        self.charge_range = 4.
-        self.Li_volume = 13.
-        self.volume_mlp = MLP(in_channels=node_dim,
-                              hidden_channels=out_mlp_dims[0],
-                              out_channels=1,
-                              num_layers=out_mlp_dims[1],
-                              norm=None,
-                              act=act)
-        self.charge_pre_mlp = MLP(in_channels=node_dim * 2 + edge_dim,
-                                  hidden_channels=pre_mlp_dims[0],
-                                  out_channels=pre_mlp_dims[1],
-                                  num_layers=pre_mlp_dims[2],
-                                  norm=None,
-                                  act=act)
-        self.charge_out_mlp = MLP(in_channels=pre_mlp_dims[1],
-                                  hidden_channels=out_mlp_dims[0],
-                                  out_channels=1,
-                                  bias=False,
-                                  num_layers=out_mlp_dims[1],
-                                  norm=None,
-                                  act='tanh')
+        self.charge_range = 4.0
+        self.Li_volume = 13.0
+        self.volume_mlp = MLP(
+            in_channels=node_dim,
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act=act,
+        )
+        self.charge_pre_mlp = MLP(
+            in_channels=node_dim * 2 + edge_dim,
+            hidden_channels=pre_mlp_dims[0],
+            out_channels=pre_mlp_dims[1],
+            num_layers=pre_mlp_dims[2],
+            norm=None,
+            act=act,
+        )
+        self.charge_out_mlp = MLP(
+            in_channels=pre_mlp_dims[1],
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            bias=False,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act="tanh",
+        )
 
     def reset_parameters(self):
         self.volume_mlp.reset_parameters()
@@ -71,8 +76,8 @@ class PreChargeVolume(PreFFLayer):
         self.charge_out_mlp.reset_parameters()
 
     def _bcc_charge(self, graph: MonoData, x_h: Tensor, e_h: Tensor):
-        node_idx = graph['inc_node_bond'].long()
-        edge_idx = graph['inc_edge_bond'].long()
+        node_idx = graph["inc_node_bond"].long()
+        edge_idx = graph["inc_edge_bond"].long()
         xs = [x_h[node_idx[:, 0]], e_h[edge_idx[:, 0]], x_h[node_idx[:, 1]]]
         xs = (torch.concat(xs, dim=-1), torch.concat(xs[::-1], dim=-1))
         y0 = self.charge_pre_mlp(xs[0])
@@ -84,54 +89,50 @@ class PreChargeVolume(PreFFLayer):
         charge = graph.node_features[:, 2].clone().to(bcc.dtype)
         # average symmetric atoms
         equiv_idx = graph.inc_node_equiv.long()
-        charge = scatter(charge, equiv_idx, 0, reduce='mean')[equiv_idx]
+        charge = scatter(charge, equiv_idx, 0, reduce="mean")[equiv_idx]
         # add bcc
         charge.scatter_add_(0, node_idx[:, 0], bcc)
         charge.scatter_add_(0, node_idx[:, 1], -bcc)
         return charge.unsqueeze(-1)
 
-    def forward(self,
-                data: MonoData,
-                x_h: Tensor,
-                e_h: Tensor,
-                ff_parameters: dict[str, Tensor] = None) -> dict[str, Tensor]:
+    def forward(
+        self, data: MonoData, x_h: Tensor, e_h: Tensor, ff_parameters: dict[str, Tensor] = None
+    ) -> dict[str, Tensor]:
         if ff_parameters is None:
             ff_parameters = {}
         charge = self._bcc_charge(data, x_h, e_h)
-        ff_parameters['PreChargeVolume.charges'] = charge
+        ff_parameters["PreChargeVolume.charges"] = charge
 
         # this v_free is written in definition, different from the trainable hyper parameter
         v_free = x_h.new(V_FREE)
-        atomic_number = data.node_features[:, 0].long()
-        v_free = v_free[atomic_number]
+        atom_type = data.node_features[:, 0].long()
+        v_free = v_free[atom_type]
 
         # predict relative volume
-        volume_ratiao = torch.exp(self.volume_mlp(x_h)).squeeze(-1)
-        volume = volume_ratiao * v_free
-        volume = torch.where(atomic_number == ELEMENT_MAP[3], self.Li_volume, volume)  # fix volume of Li
-        ff_parameters['PreChargeVolume.volumes'] = volume.unsqueeze(-1)
+        volume_ratio = torch.exp(self.volume_mlp(x_h)).squeeze(-1)
+        volume = volume_ratio * v_free
+        volume = torch.where(atom_type == 2, self.Li_volume, volume)  # fix volume of Li
+        ff_parameters["PreChargeVolume.volumes"] = volume.unsqueeze(-1)
         return ff_parameters
 
 
 class ChargeVolume(FFLayer):
-
     def reset_parameters(self):
         pass
 
     def forward(self, data, x_h, e_h, ff_parameters, cluster=False):
-        return 0., 0.
+        return 0.0, 0.0
 
 
 class PolarizationSolver(torch.nn.Module):
-
     def __init__(self, a=0.39):
         super(PolarizationSolver, self).__init__()
         self.a = a
-        logger.info(f'use a={self.a} for polarization solver')
+        logger.info(f"use a={self.a} for polarization solver")
 
     def compute_polarizability_tensor(self, n_batch, n_conf, polarizability):
         """
-        Compute the tensor alpha which is a 3N x 3N matrix, 
+        Compute the tensor alpha which is a 3N x 3N matrix,
         each 3 x 3 submatrix is a diagnoal matrix with diagonal value being an isotropic polarizability value
         """
         polar_matrix = torch.diag_embed((1 / polarizability).repeat_interleave(3, dim=-1))
@@ -143,7 +144,7 @@ class PolarizationSolver(torch.nn.Module):
         """
         Compute the damping tensor which is Sij * (1 - exp(-au^3))
         Uij = rij / (ai * aj) ** (1/6)
-        
+
         return a torch tensor of (N, N, n)
         """
         damp = -self.a * r_norm.pow(3) / polarizability_interaction.pow(0.5)
@@ -185,7 +186,7 @@ class PolarizationSolver(torch.nn.Module):
         """
         Compute the tensor T_ij within a 3N x 3N supermatrix for an array of atomic positions,
         with self-interactions (i=j) set to zero to avoid singularities.
-        
+
         Returns:
             torch.Tensor: A tensor of shape (3N, 3N) containing the supermatrix with each 3x3 block T_ij.
         """
@@ -199,7 +200,7 @@ class PolarizationSolver(torch.nn.Module):
         D1 = D1.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, -1, 3, 3)
         D2 = D2.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, -1, 3, 3)
 
-        rij_outer = torch.einsum('...i,...j->...ij', r_ij, r_ij)
+        rij_outer = torch.einsum("...i,...j->...ij", r_ij, r_ij)
 
         # Compute T_ij for all pairs
         T_ij = -(3 * rij_outer * D2 - r_norm.pow(2) * eye * D1) / r_norm.pow(5)
@@ -255,8 +256,9 @@ class PolarizationSolver(torch.nn.Module):
         node_batch = torch.arange(count_node.size()[0], dtype=torch.int64, device=device).repeat_interleave(count_node)
         alpha, _ = to_dense_batch(alpha, node_batch, fill_value=1.0)
         charge, _ = to_dense_batch(charge, node_batch)
-        positions, node_mask = to_dense_batch(coords, node_batch, fill_rand=True,
-                                              need_mask=True)  # [n_batch, n_atom, n_conf, 3], [n_batch, n_atom]
+        positions, node_mask = to_dense_batch(
+            coords, node_batch, fill_rand=True, need_mask=True
+        )  # [n_batch, n_atom, n_conf, 3], [n_batch, n_atom]
 
         batch_12, dense_index_12 = to_dense_index(node_12_idx, count_12, count_node)
         node_12_idx = (
@@ -290,12 +292,14 @@ class PolarizationSolver(torch.nn.Module):
             # print("pol_damping", pol_damping.min(), pol_damping.max())
             dp, _ = to_dense_batch(pol_damping, node_batch, fill_value=1.0)
         dp = dp.unsqueeze(-1)
-        pol_int = (dp * dp.transpose(-1, -2)).unsqueeze(1).expand(-1, n_conf, -1,
-                                                                  -1)  # [n_batch, n_conf, n_atom, n_atom]
-        scaler = coords.new_ones(
-            (n_batch, n_atom, n_atom)) - torch.eye(n_atom, device=coords.device, dtype=coords.dtype).unsqueeze(0)
-        scaler[node_12_idx] = 0.
-        scaler[node_13_idx] = 0.
+        pol_int = (
+            (dp * dp.transpose(-1, -2)).unsqueeze(1).expand(-1, n_conf, -1, -1)
+        )  # [n_batch, n_conf, n_atom, n_atom]
+        scaler = coords.new_ones((n_batch, n_atom, n_atom)) - torch.eye(
+            n_atom, device=coords.device, dtype=coords.dtype
+        ).unsqueeze(0)
+        scaler[node_12_idx] = 0.0
+        scaler[node_13_idx] = 0.0
         scaler[node_14_idx] = ind14
         scaler[node_15_idx] = ind15
         smask = node_mask.unsqueeze(-1) * node_mask.unsqueeze(-2)
@@ -339,19 +343,19 @@ class PolarizationSolver(torch.nn.Module):
 
 
 class PreExp6Pol(PreFFLayer):
-
     def __init__(
-            self,
-            node_dim: int,
-            edge_dim: int,
-            out_mlp_dims=(32, 3),  # (hidden, layers)
-            act='gelu',
-            c6_scale=1000.,
-            combining_rule='LB',
-            pol_damp_clip=1.0e-6,
-            li_damp_clip=1.0e-6,
-            fix_li_alpha=None,
-            **configs):
+        self,
+        node_dim: int,
+        edge_dim: int,
+        out_mlp_dims=(32, 3),  # (hidden, layers)
+        act="gelu",
+        c6_scale=1000.0,
+        combining_rule="LB",
+        pol_damp_clip=1.0e-6,
+        li_damp_clip=1.0e-6,
+        fix_li_alpha=None,
+        **configs,
+    ):
         super().__init__(node_dim, edge_dim, **configs)
 
         self.c6_scale = c6_scale  # control grad value of c6_free
@@ -365,30 +369,38 @@ class PreExp6Pol(PreFFLayer):
         if fix_li_alpha is not None:
             assert isinstance(fix_li_alpha, float)
 
-        self.lamb_mlp = MLP(in_channels=node_dim,
-                            hidden_channels=out_mlp_dims[0],
-                            out_channels=1,
-                            num_layers=out_mlp_dims[1],
-                            norm=None,
-                            act=act)
-        self.eps_mlp = MLP(in_channels=node_dim,
-                           hidden_channels=out_mlp_dims[0],
-                           out_channels=1,
-                           num_layers=out_mlp_dims[1],
-                           norm=None,
-                           act=act)
-        self.ct_eps_mlp = MLP(in_channels=node_dim,
-                              hidden_channels=out_mlp_dims[0],
-                              out_channels=1,
-                              num_layers=out_mlp_dims[1],
-                              norm=None,
-                              act=act)
-        self.ct_lamb_mlp = MLP(in_channels=node_dim,
-                               hidden_channels=out_mlp_dims[0],
-                               out_channels=1,
-                               num_layers=out_mlp_dims[1],
-                               norm=None,
-                               act=act)
+        self.lamb_mlp = MLP(
+            in_channels=node_dim,
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act=act,
+        )
+        self.eps_mlp = MLP(
+            in_channels=node_dim,
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act=act,
+        )
+        self.ct_eps_mlp = MLP(
+            in_channels=node_dim,
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act=act,
+        )
+        self.ct_lamb_mlp = MLP(
+            in_channels=node_dim,
+            hidden_channels=out_mlp_dims[0],
+            out_channels=1,
+            num_layers=out_mlp_dims[1],
+            norm=None,
+            act=act,
+        )
 
         self.combining_rule = combining_rule
 
@@ -398,72 +410,72 @@ class PreExp6Pol(PreFFLayer):
         self.ct_lamb_mlp.reset_parameters()
         self.ct_eps_mlp.reset_parameters()
 
-    def calc_ts(self, atomic_number, volume: Tensor):
-        v_ratio = volume / self.v_free(atomic_number)
-        c6 = self.c6_free(atomic_number) * v_ratio**2 * self.c6_scale
-        rvdw = self.rvdw_free(atomic_number) * v_ratio**(4 / 21)
-        alpha0 = self.alpha_free(atomic_number)
-        alpha = alpha0 * v_ratio**(4 / 3)
+    def calc_ts(self, atom_type, volume: Tensor):
+        v_ratio = volume / self.v_free(atom_type)
+        c6 = self.c6_free(atom_type) * v_ratio**2 * self.c6_scale
+        rvdw = self.rvdw_free(atom_type) * v_ratio ** (4 / 21)
+        alpha0 = self.alpha_free(atom_type)
+        alpha = alpha0 * v_ratio ** (4 / 3)
         return c6, rvdw, alpha0, alpha
 
-    def forward(self,
-                data: MonoData,
-                x_h: Tensor,
-                e_h: Tensor,
-                ff_parameters: dict[str, Tensor] = None) -> dict[str, Tensor]:
+    def forward(
+        self, data: MonoData, x_h: Tensor, e_h: Tensor, ff_parameters: dict[str, Tensor] = None
+    ) -> dict[str, Tensor]:
 
-        volume = ff_parameters['PreChargeVolume.volumes']
-        atomic_number = data.node_features[:, 0].long()
-        c6, rvdw, alpha0, alpha = self.calc_ts(atomic_number, volume)
+        volume = ff_parameters["PreChargeVolume.volumes"]
+        atom_type = data.node_features[:, 0].long()
+        c6, rvdw, alpha0, alpha = self.calc_ts(atom_type, volume)
 
         alpha = torch.clamp(alpha, min=1e-6)
 
         if self.fix_li_alpha is not None:
-            alpha = torch.where(atomic_number.unsqueeze(-1) == 10, self.fix_li_alpha, alpha)
+            alpha = torch.where(atom_type.unsqueeze(-1) == 2, self.fix_li_alpha, alpha)
 
-        ff_parameters['PreExp6Pol.c6'] = c6.clip(min=1e-6)
-        ff_parameters['PreExp6Pol.rvdw'] = rvdw
-        ff_parameters['PreExp6Pol.alpha'] = alpha
-        ff_parameters['PreExp6Pol.alpha0'] = alpha0
-        ff_parameters['PreExp6Pol.eps'] = torch.exp(self.eps_mlp(x_h))
-        ff_parameters['PreExp6Pol.ct_eps'] = torch.exp(self.ct_eps_mlp(x_h))
-        ff_parameters['PreExp6Pol.ct_lamb'] = torch.exp(self.ct_lamb_mlp(x_h))
+        ff_parameters["PreExp6Pol.c6"] = c6.clip(min=1e-6)
+        ff_parameters["PreExp6Pol.rvdw"] = rvdw
+        ff_parameters["PreExp6Pol.alpha"] = alpha
+        ff_parameters["PreExp6Pol.alpha0"] = alpha0
+        ff_parameters["PreExp6Pol.eps"] = torch.exp(self.eps_mlp(x_h))
+        ff_parameters["PreExp6Pol.ct_eps"] = torch.exp(self.ct_eps_mlp(x_h))
+        ff_parameters["PreExp6Pol.ct_lamb"] = torch.exp(self.ct_lamb_mlp(x_h))
 
-        lamb = torch.exp(self.lamb_mlp(x_h)) * 5.
-        ff_parameters['PreExp6Pol.lambda'] = lamb
+        lamb = torch.exp(self.lamb_mlp(x_h)) * 5.0
+        ff_parameters["PreExp6Pol.lambda"] = lamb
         damping = alpha.clone().squeeze(-1)
         # li damp clip
-        if self.li_damp_clip > 0.:
+        if self.li_damp_clip > 0.0:
             if not isinstance(self.li_damp_clip, float):
                 li_pd = self.li_damp_clip.unsqueeze(-1).expand(damping.shape)
             else:
                 li_pd = torch.clip(damping, min=self.li_damp_clip)
-            damping = torch.where(data.node_features[:, 0] == 10, li_pd, damping)
+            damping = torch.where(data.node_features[:, 0] == 2, li_pd, damping)
         pol_damping = torch.clip(damping, min=self.pol_damp_clip)
-        ff_parameters['PreExp6Pol.pol_damping'] = pol_damping.clone()
+        ff_parameters["PreExp6Pol.pol_damping"] = pol_damping.clone()
         return ff_parameters
 
 
 class Exp6Pol(FFLayer):
-    """ Modified from apple&p.
-        Reference: 
-        Borodin and Smith - 2006 - Development of Many-Body Polarizable Force Fields, DOI: 10.1021/jp055079e
-        Borodin - 2009 - Polarizable Force Field Development and Molecular, DOI: 10.1021/jp905220k
+    """Modified from apple&p.
+    Reference:
+    Borodin and Smith - 2006 - Development of Many-Body Polarizable Force Fields, DOI: 10.1021/jp055079e
+    Borodin - 2009 - Polarizable Force Field Development and Molecular, DOI: 10.1021/jp905220k
     """
 
-    def __init__(self,
-                 node_dim: int,
-                 edge_dim: int,
-                 vdw14: float = 0.5,
-                 charge14: float = 0.5,
-                 ind14: float = 0.5,
-                 ind15: float = 1.0,
-                 pol_damping_factor=0.39,
-                 disp_damping_factor=0.4,
-                 s12=0.,
-                 calc_pol=True,
-                 combining_rule='LB',
-                 **configs):
+    def __init__(
+        self,
+        node_dim: int,
+        edge_dim: int,
+        vdw14: float = 0.5,
+        charge14: float = 0.5,
+        ind14: float = 0.5,
+        ind15: float = 1.0,
+        pol_damping_factor=0.39,
+        disp_damping_factor=0.4,
+        s12=0.0,
+        calc_pol=True,
+        combining_rule="LB",
+        **configs,
+    ):
         super().__init__(node_dim, edge_dim)
         self.vdw14 = vdw14
         self.charge14 = charge14
@@ -473,11 +485,8 @@ class Exp6Pol(FFLayer):
         self.disp_damping_factor = disp_damping_factor
         self.s12 = s12
         self.calc_pol = calc_pol
-        self.nuclear_charge = Embedding.from_pretrained(torch.tensor(SUPPORTED_ELEMENTS,
-                                                                     dtype=torch.float32).unsqueeze(-1),
-                                                        freeze=True)
 
-        assert combining_rule in ['LB', 'GM']
+        assert combining_rule in ["LB", "GM"]
         self.combining_rule = combining_rule
 
     def reset_parameters(self):
@@ -491,14 +500,14 @@ class Exp6Pol(FFLayer):
 
     @staticmethod
     def combining(ai, aj, lamb, c6, r0, combining_rule, eps=None) -> tuple[Tensor]:
-        """ Lorentz-Berthelot (LB) and geometric (GM) combining rule """
+        """Lorentz-Berthelot (LB) and geometric (GM) combining rule"""
         r0_i, r0_j = r0[ai], r0[aj]
-        if combining_rule == 'LB':
+        if combining_rule == "LB":
             r0_ij = ((r0_i + r0_j) / 2).unsqueeze(-1)
-        elif combining_rule == 'GM':
+        elif combining_rule == "GM":
             r0_ij = torch.sqrt(r0_i * r0_j).unsqueeze(-1)
         else:
-            raise NotImplementedError(f'combining_rule {combining_rule}')
+            raise NotImplementedError(f"combining_rule {combining_rule}")
 
         lamb_i, lamb_j = lamb[ai], lamb[aj]
         c6i, c6j = c6[ai], c6[aj]
@@ -550,14 +559,14 @@ class Exp6Pol(FFLayer):
         nconfs = coords.shape[1]
         pe0 = 6 * eps * torch.exp(lamb * (1 - r / r0))
         pair_energy = pe0.clone()
-        if self.s12 > 0.:
-            pe1 = (self.s12 / r)**12
+        if self.s12 > 0.0:
+            pe1 = (self.s12 / r) ** 12
             pair_energy += pe1
 
         rep_energy = reduce_counts(pair_energy, counts)  # [batch_size, nconfs]
 
         pair_force = -lamb / r0 * pe0
-        if self.s12 > 0.:
+        if self.s12 > 0.0:
             pair_force = pair_force - 12 * pe1 / r
 
         pair_force = (pair_force / r).unsqueeze(-1) * r_vec
@@ -582,10 +591,10 @@ class Exp6Pol(FFLayer):
             alpha,
             charge,
             data.get_count("node", idx=None, cluster=cluster),
-            data.get_count('nonbonded12', idx=None, cluster=cluster),
-            data.get_count('nonbonded13', idx=None, cluster=cluster),
-            data.get_count('nonbonded14', idx=None, cluster=cluster),
-            data.get_count('nonbonded15', idx=None, cluster=cluster),
+            data.get_count("nonbonded12", idx=None, cluster=cluster),
+            data.get_count("nonbonded13", idx=None, cluster=cluster),
+            data.get_count("nonbonded14", idx=None, cluster=cluster),
+            data.get_count("nonbonded15", idx=None, cluster=cluster),
             data.inc_node_nonbonded12.long(),
             data.inc_node_nonbonded13.long(),
             data.inc_node_nonbonded14.long(),
@@ -618,20 +627,22 @@ class Exp6Pol(FFLayer):
 
         return chg_energy, chg_forces
 
-    def calc_cluster_elec_energy(self,
-                                 data: ClusterData,
-                                 charge: Tensor,
-                                 dipole: Tensor,
-                                 scaler: Tensor,
-                                 lambda3: Tensor,
-                                 lambda5: Tensor,
-                                 exlude_charge=True,
-                                 cluster=True):
-        """ Calculate electrostatic energy of the cluster, up to dipole interaction.
-            charge: [natom_all]
-            dipole: [natom_all, n_conf, 3]
-            scaler: [n_batch, n_conf, n_atom, n_atom]
-            lambda3, lambda5: [n_batch, n_conf, n_atom, n_atom]
+    def calc_cluster_elec_energy(
+        self,
+        data: ClusterData,
+        charge: Tensor,
+        dipole: Tensor,
+        scaler: Tensor,
+        lambda3: Tensor,
+        lambda5: Tensor,
+        exlude_charge=True,
+        cluster=True,
+    ):
+        """Calculate electrostatic energy of the cluster, up to dipole interaction.
+        charge: [natom_all]
+        dipole: [natom_all, n_conf, 3]
+        scaler: [n_batch, n_conf, n_atom, n_atom]
+        lambda3, lambda5: [n_batch, n_conf, n_atom, n_atom]
         """
         coords = data.coords
         device = coords.device
@@ -640,14 +651,16 @@ class Exp6Pol(FFLayer):
         count_node = data.get_count("node", idx=None, cluster=cluster)
         node_batch = torch.arange(count_node.size()[0], dtype=torch.int64, device=device).repeat_interleave(count_node)
         charges, _ = to_dense_batch(charge, node_batch)  # [n_batch, n_atom]
-        positions, node_mask = to_dense_batch(coords, node_batch, fill_rand=True,
-                                              need_mask=True)  # [n_batch, n_atom, n_conf, 3], [n_batch, n_atom]
+        positions, node_mask = to_dense_batch(
+            coords, node_batch, fill_rand=True, need_mask=True
+        )  # [n_batch, n_atom, n_conf, 3], [n_batch, n_atom]
         dipoles, _ = to_dense_batch(dipole, node_batch, fill_rand=True)  # [n_batch, n_atom, n_conf, 3]
 
         n_batch, n_atom, n_conf, _ = dipoles.shape
         charges = charges.view(n_batch, n_atom, 1, 1).repeat(1, 1, n_conf, 1)  # [n_batch, n_atom, n_conf, 1]
-        M = torch.concat([charges, dipoles], dim=-1).movedim(-2, 1).reshape(n_batch, n_conf,
-                                                                            -1)  # [n_batch, n_conf, n_atom * 4]
+        M = (
+            torch.concat([charges, dipoles], dim=-1).movedim(-2, 1).reshape(n_batch, n_conf, -1)
+        )  # [n_batch, n_conf, n_atom * 4]
 
         pos_i = positions.unsqueeze(1).expand(-1, n_atom, -1, -1, -1)
         pos_j = positions.unsqueeze(2).expand(-1, -1, n_atom, -1, -1)
@@ -695,17 +708,17 @@ class Exp6Pol(FFLayer):
         U = - eps * exp(- lambda * (r / r0))
         """
         r0i, r0j = r0[ai].unsqueeze(-1), r0[aj].unsqueeze(-1)
-        eps = ff_parameters['PreExp6Pol.ct_eps']
-        lamb = ff_parameters['PreExp6Pol.ct_lamb']
+        eps = ff_parameters["PreExp6Pol.ct_eps"]
+        lamb = ff_parameters["PreExp6Pol.ct_lamb"]
         eps_i, eps_j = eps[ai], eps[aj]
         lamb_i, lamb_j = lamb[ai], lamb[aj]
         eps_ij = (eps_i * eps_j).sqrt()
         lamb_ij = (lamb_i * lamb_j).sqrt()
         r0_ij = (r0i + r0j) / 2
 
-        pair_energy = -eps_ij * r.pow(-4) * torch.exp(-(lamb_ij * r / r0_ij)**3)
+        pair_energy = -eps_ij * r.pow(-4) * torch.exp(-((lamb_ij * r / r0_ij) ** 3))
         ct_energy = reduce_counts(pair_energy, counts)
-        pair_force = pair_energy * (-3.0 * (lamb_ij * r / r0_ij)**3 / r - 4 / r)
+        pair_force = pair_energy * (-3.0 * (lamb_ij * r / r0_ij) ** 3 / r - 4 / r)
         pair_force = (pair_force / r).unsqueeze(-1) * r_vec
         ct_forces = torch.zeros_like(coords)
         nconfs = coords.shape[1]
@@ -724,30 +737,30 @@ class Exp6Pol(FFLayer):
 
         coords = data.coords
         confmask = data.confmask_cluster if cluster else data.confmask
-        n_atom = data.get_count('node', idx=None, cluster=cluster)
+        n_atom = data.get_count("node", idx=None, cluster=cluster)
         confmask_forces = confmask.repeat_interleave(n_atom, 0).unsqueeze(-1)
-        surfix = '_cluster' if cluster else ''
+        surfix = "_cluster" if cluster else ""
 
-        charge = ff_parameters['PreChargeVolume.charges'].squeeze(-1)
-        lamb = ff_parameters['PreExp6Pol.lambda']
-        c6 = ff_parameters['PreExp6Pol.c6'].squeeze(-1)
-        r0 = ff_parameters['PreExp6Pol.rvdw'].squeeze(-1)
-        alpha = ff_parameters['PreExp6Pol.alpha'].squeeze(-1).clone()
-        eps = ff_parameters['PreExp6Pol.eps']
+        charge = ff_parameters["PreChargeVolume.charges"].squeeze(-1)
+        lamb = ff_parameters["PreExp6Pol.lambda"]
+        c6 = ff_parameters["PreExp6Pol.c6"].squeeze(-1)
+        r0 = ff_parameters["PreExp6Pol.rvdw"].squeeze(-1)
+        alpha = ff_parameters["PreExp6Pol.alpha"].squeeze(-1).clone()
+        eps = ff_parameters["PreExp6Pol.eps"]
         e_static_ind, e_static_ind_split = None, None
 
         node14_idx = data.inc_node_nonbonded14.long()
-        counts14 = data.get_count('nonbonded14', idx=None, cluster=cluster)
+        counts14 = data.get_count("nonbonded14", idx=None, cluster=cluster)
 
         nodeall_idx = data.inc_node_nonbonded_all_cluster.long() if cluster else data.inc_node_nonbonded_all.long()
-        countsall = data.get_count('nonbonded_all', idx=None, cluster=cluster)
+        countsall = data.get_count("nonbonded_all", idx=None, cluster=cluster)
 
         # nonbonded 14
         ai, aj, r, r_vec = self.calc_dist(coords, node14_idx)
-        if self.combining_rule in ['LB', 'GM']:
+        if self.combining_rule in ["LB", "GM"]:
             params = self.combining(ai, aj, lamb, c6, r0, self.combining_rule, eps=eps)
         else:
-            raise NotImplementedError(f'combining_rule {self.combining_rule}')
+            raise NotImplementedError(f"combining_rule {self.combining_rule}")
 
         rep_energy_14, rep_forces_14 = self.calc_rep(coords, r, r_vec, ai, aj, counts14, *params)
         disp_energy_14, disp_forces_14 = self.calc_disp(coords, r, r_vec, ai, aj, counts14, *params)
@@ -755,17 +768,17 @@ class Exp6Pol(FFLayer):
 
         # nonbonded all
         ai, aj, r, r_vec = self.calc_dist(coords, nodeall_idx)
-        if self.combining_rule in ['LB', 'GM']:
+        if self.combining_rule in ["LB", "GM"]:
             params = self.combining(ai, aj, lamb, c6, r0, self.combining_rule, eps=eps)
         else:
-            raise NotImplementedError(f'combining_rule {self.combining_rule}')
+            raise NotImplementedError(f"combining_rule {self.combining_rule}")
 
         rep_energy_all, rep_forces_all = self.calc_rep(coords, r, r_vec, ai, aj, countsall, *params)
         disp_energy_all, disp_forces_all = self.calc_disp(coords, r, r_vec, ai, aj, countsall, *params)
         chg_e_all, chg_f_all = self.calc_perm(coords, ai, aj, countsall, charge, r, r_vec)
 
         ai15, aj15, r15, r_vec15 = self.calc_dist(coords, data.inc_node_nonbonded15.long())
-        count15 = data.get_count('nonbonded15', idx=None, cluster=cluster)
+        count15 = data.get_count("nonbonded15", idx=None, cluster=cluster)
         ct_energy, ct_force = self.calc_charge_transfer(
             coords,
             ff_parameters,
@@ -791,7 +804,7 @@ class Exp6Pol(FFLayer):
 
         # nonbonded induction
         if self.calc_pol:
-            pol_damping = ff_parameters['PreExp6Pol.pol_damping'].squeeze(-1)
+            pol_damping = ff_parameters["PreExp6Pol.pol_damping"].squeeze(-1)
             _, mu_p, induction_e, induction_f, scaler, lambda3, lambda5 = self.calc_induction(
                 data,
                 charge,
@@ -801,76 +814,87 @@ class Exp6Pol(FFLayer):
             )
             mu_p = mu_p * confmask_forces
             if not cluster:
-                ff_parameters['Exp6Pol.mu_p'] = mu_p.clone()
-                ff_parameters['Exp6Pol.ind_scaler'] = scaler.clone()
-                ff_parameters['Exp6Pol.ind_lambda3'] = lambda3.clone()
-                ff_parameters['Exp6Pol.ind_lambda5'] = lambda5.clone()
+                ff_parameters["Exp6Pol.mu_p"] = mu_p.clone()
+                ff_parameters["Exp6Pol.ind_scaler"] = scaler.clone()
+                ff_parameters["Exp6Pol.ind_lambda3"] = lambda3.clone()
+                ff_parameters["Exp6Pol.ind_lambda5"] = lambda5.clone()
 
             if cluster:
-                ff_parameters['Exp6Pol.mu_p_cluster'] = mu_p.clone()
-                e_static_ind_split = self.calc_cluster_elec_energy(data,
-                                                                   charge,
-                                                                   ff_parameters['Exp6Pol.mu_p'],
-                                                                   ff_parameters['Exp6Pol.ind_scaler'],
-                                                                   ff_parameters['Exp6Pol.ind_lambda3'],
-                                                                   ff_parameters['Exp6Pol.ind_lambda5'],
-                                                                   exlude_charge=True,
-                                                                   cluster=False)
+                ff_parameters["Exp6Pol.mu_p_cluster"] = mu_p.clone()
+                e_static_ind_split = self.calc_cluster_elec_energy(
+                    data,
+                    charge,
+                    ff_parameters["Exp6Pol.mu_p"],
+                    ff_parameters["Exp6Pol.ind_scaler"],
+                    ff_parameters["Exp6Pol.ind_lambda3"],
+                    ff_parameters["Exp6Pol.ind_lambda5"],
+                    exlude_charge=True,
+                    cluster=False,
+                )
 
-                e_static_ind = self.calc_cluster_elec_energy(data,
-                                                             charge,
-                                                             ff_parameters['Exp6Pol.mu_p'],
-                                                             scaler,
-                                                             lambda3,
-                                                             lambda5,
-                                                             exlude_charge=True)
+                e_static_ind = self.calc_cluster_elec_energy(
+                    data, charge, ff_parameters["Exp6Pol.mu_p"], scaler, lambda3, lambda5, exlude_charge=True
+                )
         else:
-            induction_e, induction_f = 0., 0.
+            induction_e, induction_f = 0.0, 0.0
 
-        ff_parameters['Exp6Pol.perm_chg_energy' + surfix] = (chg_e_all + self.charge14 * chg_e_14) * confmask
-        ff_parameters['Exp6Pol.induction_energy' + surfix] = induction_e * confmask
-        ff_parameters['Exp6Pol.rep_energy' + surfix] = (rep_energy_14 * self.vdw14 + rep_energy_all) * confmask
-        ff_parameters['Exp6Pol.disp_energy' + surfix] = (disp_energy_14 * self.vdw14 + disp_energy_all) * confmask
-        ff_parameters['Exp6Pol.perm_chg_forces' + surfix] = (chg_f_all + self.charge14 * chg_f_14) * confmask_forces
-        ff_parameters['Exp6Pol.induction_forces' + surfix] = induction_f * confmask_forces
-        ff_parameters['Exp6Pol.rep_forces' + surfix] = (rep_forces_14 * self.vdw14 + rep_forces_all) * confmask_forces
-        ff_parameters['Exp6Pol.disp_forces' +
-                      surfix] = (disp_forces_14 * self.vdw14 + disp_forces_all) * confmask_forces
+        ff_parameters["Exp6Pol.perm_chg_energy" + surfix] = (chg_e_all + self.charge14 * chg_e_14) * confmask
+        ff_parameters["Exp6Pol.induction_energy" + surfix] = induction_e * confmask
+        ff_parameters["Exp6Pol.rep_energy" + surfix] = (rep_energy_14 * self.vdw14 + rep_energy_all) * confmask
+        ff_parameters["Exp6Pol.disp_energy" + surfix] = (disp_energy_14 * self.vdw14 + disp_energy_all) * confmask
+        ff_parameters["Exp6Pol.perm_chg_forces" + surfix] = (chg_f_all + self.charge14 * chg_f_14) * confmask_forces
+        ff_parameters["Exp6Pol.induction_forces" + surfix] = induction_f * confmask_forces
+        ff_parameters["Exp6Pol.rep_forces" + surfix] = (rep_forces_14 * self.vdw14 + rep_forces_all) * confmask_forces
+        ff_parameters["Exp6Pol.disp_forces" + surfix] = (
+            disp_forces_14 * self.vdw14 + disp_forces_all
+        ) * confmask_forces
 
-        ff_parameters['Exp6Pol.energy' + surfix] = (ff_parameters['Exp6Pol.perm_chg_energy' + surfix] +
-                                                    ff_parameters['Exp6Pol.induction_energy' + surfix] +
-                                                    ff_parameters['Exp6Pol.rep_energy' + surfix] +
-                                                    ff_parameters['Exp6Pol.disp_energy' + surfix])
-        ff_parameters['Exp6Pol.forces' + surfix] = (ff_parameters['Exp6Pol.perm_chg_forces' + surfix] +
-                                                    ff_parameters['Exp6Pol.induction_forces' + surfix] +
-                                                    ff_parameters['Exp6Pol.rep_forces' + surfix] +
-                                                    ff_parameters['Exp6Pol.disp_forces' + surfix])
+        ff_parameters["Exp6Pol.energy" + surfix] = (
+            ff_parameters["Exp6Pol.perm_chg_energy" + surfix]
+            + ff_parameters["Exp6Pol.induction_energy" + surfix]
+            + ff_parameters["Exp6Pol.rep_energy" + surfix]
+            + ff_parameters["Exp6Pol.disp_energy" + surfix]
+        )
+        ff_parameters["Exp6Pol.forces" + surfix] = (
+            ff_parameters["Exp6Pol.perm_chg_forces" + surfix]
+            + ff_parameters["Exp6Pol.induction_forces" + surfix]
+            + ff_parameters["Exp6Pol.rep_forces" + surfix]
+            + ff_parameters["Exp6Pol.disp_forces" + surfix]
+        )
 
-        ff_parameters['Exp6Pol.ct_energy' + surfix] = ct_energy * confmask
-        ff_parameters['Exp6Pol.ct_forces' + surfix] = ct_force * confmask_forces
-        ff_parameters['Exp6Pol.energy' + surfix] += ff_parameters['Exp6Pol.ct_energy' + surfix]
-        ff_parameters['Exp6Pol.forces' + surfix] += ff_parameters['Exp6Pol.ct_forces' + surfix]
+        ff_parameters["Exp6Pol.ct_energy" + surfix] = ct_energy * confmask
+        ff_parameters["Exp6Pol.ct_forces" + surfix] = ct_force * confmask_forces
+        ff_parameters["Exp6Pol.energy" + surfix] += ff_parameters["Exp6Pol.ct_energy" + surfix]
+        ff_parameters["Exp6Pol.forces" + surfix] += ff_parameters["Exp6Pol.ct_forces" + surfix]
 
-        if cluster and 'Exp6Pol.disp_energy' in ff_parameters:
-            nmols = data.get_count('mol', idx=None, cluster=True)
-            batches = torch.arange(nmols.shape[0], device=nmols.device).repeat_interleave(nmols).unsqueeze(-1).expand(
-                -1, chg_e_all.shape[1])
+        if cluster and "Exp6Pol.disp_energy" in ff_parameters:
+            nmols = data.get_count("mol", idx=None, cluster=True)
+            batches = (
+                torch.arange(nmols.shape[0], device=nmols.device)
+                .repeat_interleave(nmols)
+                .unsqueeze(-1)
+                .expand(-1, chg_e_all.shape[1])
+            )
             template = torch.zeros_like(chg_e_all)
 
-            ff_parameters['DISP'] = ff_parameters['Exp6Pol.disp_energy_cluster'] - template.clone().scatter_add_(
-                0, batches, ff_parameters['Exp6Pol.disp_energy'])
-            ff_parameters['PAULI'] = ff_parameters['Exp6Pol.rep_energy_cluster'] - template.clone().scatter_add_(
-                0, batches, ff_parameters['Exp6Pol.rep_energy'])
-            ff_parameters['ELEC'] = ff_parameters['Exp6Pol.perm_chg_energy_cluster'] - template.clone().scatter_add_(
-                0, batches, ff_parameters['Exp6Pol.perm_chg_energy'])
-            ind_0 = template.clone().scatter_add_(0, batches, ff_parameters['Exp6Pol.induction_energy'])
-            ff_parameters['POLARIZATION'] = ff_parameters['Exp6Pol.induction_energy_cluster'] - ind_0
+            ff_parameters["DISP"] = ff_parameters["Exp6Pol.disp_energy_cluster"] - template.clone().scatter_add_(
+                0, batches, ff_parameters["Exp6Pol.disp_energy"]
+            )
+            ff_parameters["PAULI"] = ff_parameters["Exp6Pol.rep_energy_cluster"] - template.clone().scatter_add_(
+                0, batches, ff_parameters["Exp6Pol.rep_energy"]
+            )
+            ff_parameters["ELEC"] = ff_parameters["Exp6Pol.perm_chg_energy_cluster"] - template.clone().scatter_add_(
+                0, batches, ff_parameters["Exp6Pol.perm_chg_energy"]
+            )
+            ind_0 = template.clone().scatter_add_(0, batches, ff_parameters["Exp6Pol.induction_energy"])
+            ff_parameters["POLARIZATION"] = ff_parameters["Exp6Pol.induction_energy_cluster"] - ind_0
 
             e_dip = e_static_ind - template.clone().scatter_add_(0, batches, e_static_ind_split)
-            ff_parameters['ELEC'] += e_dip
-            ff_parameters['POLARIZATION'] -= e_dip
+            ff_parameters["ELEC"] += e_dip
+            ff_parameters["POLARIZATION"] -= e_dip
 
-            ff_parameters['CHARGE_TRANSFER'] = ff_parameters['Exp6Pol.ct_energy_cluster'] - template.clone(
-            ).scatter_add_(0, batches, ff_parameters['Exp6Pol.ct_energy'])
+            ff_parameters["CHARGE_TRANSFER"] = ff_parameters[
+                "Exp6Pol.ct_energy_cluster"
+            ] - template.clone().scatter_add_(0, batches, ff_parameters["Exp6Pol.ct_energy"])
 
-        return ff_parameters['Exp6Pol.energy' + surfix].clone(), ff_parameters['Exp6Pol.forces' + surfix].clone()
+        return ff_parameters["Exp6Pol.energy" + surfix].clone(), ff_parameters["Exp6Pol.forces" + surfix].clone()

@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "byteff2"
+version = "1.1.0"
+description = "ByteFF and ByteFF-Pol source package"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "rdkit~=2026.3",
+    "ase~=3.29.0",
+    "torch~=2.11.0",
+    "torch-geometric~=2.8.0",
+    "sella~=2.3",
+    "gitpython~=3.1",
+    "mdanalysis~=2.10",
+    "h5py~=3.16",
+    "numpy~=2.4",
+    "pandas~=3.0",
+    "pyyaml~=6.0",
+    "scipy~=1.17",
+    "tqdm~=4.67",
+    "torchmetrics>=1.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.0",
+    "pytest~=9.1.1",
+    "pytest-cov~=7.1",
+    "pytest-xdist~=3.8",
+    "pytest-random-order~=1.2",
+    "ruff>=0.16",
+]
+[tool.setuptools.packages.find]
+include = ["byteff2*"]
+
+[tool.setuptools.package-data]
+"byteff2.bytemol.toolkit.infer_molecule" = ["bond_length_ref.csv"]
+
+[tool.pytest.ini_options]
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli = true
+log_level = "INFO"
+filterwarnings = ["always"]
+markers = ["serial"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = ["**/deprecated/**", "**/debug/**", "scripts/**", "submodules/openmm"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors: indentation, whitespace, blank lines, etc.
+    "F",   # Pyflakes: unused imports, undefined names, duplicate keys, etc.
+    "W",   # pycodestyle warnings: trailing whitespace, missing newline, invalid escapes, etc.
+    "PLE", # pylint errors: runtime errors (yield in __init__, invalid signatures, etc.
+    "PLW", # pylint warnings: suspicious patterns, unspecified encoding, etc.
+    "PLR", # pylint refactoring: too many branches/args/statements, collapsible else-if, etc.
+    "PLC", # pylint conventions: naming, import aliases, __slots__ style, etc.
+    "I",   # isort: import sorting and formatting
+]
+ignore = [
+    "PLW1514", # open() without explicit encoding argument
+    "E402",    # module-level import not at top of file
+    "E741",    # Checks for the use of the characters 'l', 'O', or 'I' as variable names.
+    "PLC0415", # import outside top-level scope
+    "PLR0402", # use "from X import Y" instead of "import X as X"
+    "PLR0904", # too many public methods
+    "PLR0912", # too many branches (default max 12)
+    "PLR0915", # too many statements
+    "PLR1711", # useless return / return None at end of function
+    "PLR2004", # magic numbers
+    "PLR5501", # collapsible else-if (use elif)
+    "PLR0913", # too many arguments in function definition
+    "PLR0911", # too many return statements
+]
+
+[tool.ruff.lint.pylint]
+max-args = 12
+max-locals = 50
+
+[tool.ruff.lint.isort]
+known-first-party = ["byteff2", "example", "scripts"]
+force-sort-within-sections = true
+order-by-type = false
+combine-as-imports = true
+lines-after-imports = 2
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

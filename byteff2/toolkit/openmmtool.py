@@ -21,10 +21,11 @@ import networkx as nx
 import numpy as np
 import openmm as omm
 import openmm.app as app
-import openmm.unit as openmm_unit
 from openmm.app.gromacstopfile import GromacsTopFile
+import openmm.unit as openmm_unit
 
-from bytemol.toolkit.asetool.basecalculator import BaseCalculator
+from byteff2.bytemol.toolkit.asetool.basecalculator import BaseCalculator
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,44 +42,43 @@ def nx_covalent_map_and_pairs(natoms: int, pairs: Iterable) -> tuple[dict]:
     assert graph.number_of_nodes() == natoms
 
     covalent_map = {}
-    pair_recs = {'1-2': set(), '1-3': set(), '1-4': set(), '1-5': set(), '1-6': set()}
+    pair_recs = {"1-2": set(), "1-3": set(), "1-4": set(), "1-5": set(), "1-6": set()}
     for node in graph.nodes():
-        neighbors = {'1-2': [], '1-3': [], '1-4': [], '1-5': [], '1-6': []}
+        neighbors = {"1-2": [], "1-3": [], "1-4": [], "1-5": [], "1-6": []}
         all_neighbors = set()
         for target_node, distance in nx.single_source_shortest_path_length(graph, source=node, cutoff=4).items():
             all_neighbors.add(target_node)
             if distance == 1:
-                neighbors['1-2'].append(target_node)
-                pair_recs['1-2'].add(tuple(sorted((node, target_node))))
+                neighbors["1-2"].append(target_node)
+                pair_recs["1-2"].add(tuple(sorted((node, target_node))))
             elif distance == 2:
-                neighbors['1-3'].append(target_node)
-                pair_recs['1-3'].add(tuple(sorted((node, target_node))))
+                neighbors["1-3"].append(target_node)
+                pair_recs["1-3"].add(tuple(sorted((node, target_node))))
             elif distance == 3:
-                neighbors['1-4'].append(target_node)
-                pair_recs['1-4'].add(tuple(sorted((node, target_node))))
+                neighbors["1-4"].append(target_node)
+                pair_recs["1-4"].add(tuple(sorted((node, target_node))))
             elif distance == 4:
-                neighbors['1-5'].append(target_node)
-                pair_recs['1-5'].add(tuple(sorted((node, target_node))))
-        neighbors['1-6'] = list(set(range(natoms)) - {node} - all_neighbors)
-        pair_recs['1-6'] |= {tuple(sorted((node, nb))) for nb in neighbors['1-6']}
+                neighbors["1-5"].append(target_node)
+                pair_recs["1-5"].add(tuple(sorted((node, target_node))))
+        neighbors["1-6"] = list(set(range(natoms)) - {node} - all_neighbors)
+        pair_recs["1-6"] |= {tuple(sorted((node, nb))) for nb in neighbors["1-6"]}
         covalent_map[node] = neighbors
 
     return covalent_map, pair_recs
 
 
-def generate_openmm_system(top_file,
-                           nonbonded_params: dict,
-                           unit_cell=None,
-                           cutoff=1.0) -> tuple[GromacsTopFile, omm.System]:
-    """ Build openmm system for ByteFF-Pol """
+def generate_byteffpol_system(
+    top_file, nonbonded_params: dict, unit_cell=None, cutoff=1.0
+) -> tuple[GromacsTopFile, omm.System]:
+    """Build openmm system for ByteFF-Pol"""
 
-    assert isinstance(top_file, str) and top_file.endswith('.top'), 'input system must be a full gromacs topology'
+    assert isinstance(top_file, str) and top_file.endswith(".top"), "input system must be a full gromacs topology"
 
-    metadata = nonbonded_params.get('metadata', {})
-    s12 = metadata.get('s12', 0.15)
-    disp_damping = metadata.get('disp_damping', 0.4)
+    metadata = nonbonded_params.get("metadata", {})
+    s12 = metadata.get("s12", 0.15)
+    disp_damping = metadata.get("disp_damping", 0.4)
 
-    logger.info(f's12: {s12}, disp_damping: {disp_damping}')
+    logger.info(f"s12: {s12}, disp_damping: {disp_damping}")
     if unit_cell:
         top = GromacsTopFile(top_file, unitCellDimensions=unit_cell)
         system: omm.System = top.createSystem(nonbondedMethod=app.NoCutoff, constraints=False)
@@ -131,12 +131,12 @@ def generate_openmm_system(top_file,
     lj14force.addPerBondParameter("S")  # scale
 
     species = copy.deepcopy(top._molecules)
-    logger.info(f'molecules {species}')
+    logger.info(f"molecules {species}")
     residue_shift, index_shift = 0, 0
     residues = list(top.topology.residues())
     for mol_name, mol_number in species:
         params = nonbonded_params[mol_name]
-        tot_charge = sum(params['charge'])
+        tot_charge = sum(params["charge"])
         assert abs(tot_charge - round(tot_charge)) < 1e-2
 
         # build covalent map (1-2, 1-3, 1-4, 1-5)
@@ -149,16 +149,16 @@ def generate_openmm_system(top_file,
         for _ in range(mol_number):
             # handle each molecule
             for iatom in range(natoms):
-                charge = params['charge'][iatom]
-                alpha = params['alpha'][iatom]
-                Rvdw = params['Rvdw'][iatom]
+                charge = params["charge"][iatom]
+                alpha = params["alpha"][iatom]
+                Rvdw = params["Rvdw"][iatom]
 
-                lamb = params['lamb'][iatom]
-                eps = params['eps'][iatom]
-                C6 = params['C6'][iatom]
-                pol_damp = params['pol_damping'][iatom]
-                ct_eps = params['ct_eps'][iatom]
-                ct_lamb = params['ct_lamb'][iatom]
+                lamb = params["lamb"][iatom]
+                eps = params["eps"][iatom]
+                C6 = params["C6"][iatom]
+                pol_damp = params["pol_damping"][iatom]
+                ct_eps = params["ct_eps"][iatom]
+                ct_lamb = params["ct_lamb"][iatom]
 
                 # amoeba_force
 
@@ -171,60 +171,74 @@ def generate_openmm_system(top_file,
                 particle_idx = amoeba_force.addMultipole(
                     charge,
                     dipoles,  # permanent dipole is zero
-                    quadrupoles,  # permanent quadrupole is zero 
+                    quadrupoles,  # permanent quadrupole is zero
                     axisType=axis_type,  # axisType
                     multipoleAtomZ=axis_indices[0],
                     multipoleAtomX=axis_indices[1],
                     multipoleAtomY=axis_indices[2],
                     thole=thole,
-                    dampingFactor=(pol_damp)**(1 / 6),
+                    dampingFactor=(pol_damp) ** (1 / 6),
                     polarity=alpha,
                 )
                 interactions = covalent_map[iatom]
                 # colvalent map
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.Covalent12,
-                                            [ii + index_shift for ii in interactions["1-2"]])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.Covalent13,
-                                            [ii + index_shift for ii in interactions["1-3"]])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.Covalent14,
-                                            [ii + index_shift for ii in interactions["1-4"]])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.Covalent15,
-                                            [ii + index_shift for ii in interactions["1-5"]])
+                amoeba_force.setCovalentMap(
+                    particle_idx, omm.AmoebaMultipoleForce.Covalent12, [ii + index_shift for ii in interactions["1-2"]]
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx, omm.AmoebaMultipoleForce.Covalent13, [ii + index_shift for ii in interactions["1-3"]]
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx, omm.AmoebaMultipoleForce.Covalent14, [ii + index_shift for ii in interactions["1-4"]]
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx, omm.AmoebaMultipoleForce.Covalent15, [ii + index_shift for ii in interactions["1-5"]]
+                )
                 # polarization covalent map, each atom is an independent polarization group
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.PolarizationCovalent11,
-                                            [particle_idx])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.PolarizationCovalent12,
-                                            [ii + index_shift for ii in interactions["1-2"]])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.PolarizationCovalent13,
-                                            [ii + index_shift for ii in interactions["1-3"]])
-                amoeba_force.setCovalentMap(particle_idx, omm.AmoebaMultipoleForce.PolarizationCovalent14,
-                                            [ii + index_shift for ii in interactions["1-4"]])
+                amoeba_force.setCovalentMap(
+                    particle_idx, omm.AmoebaMultipoleForce.PolarizationCovalent11, [particle_idx]
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx,
+                    omm.AmoebaMultipoleForce.PolarizationCovalent12,
+                    [ii + index_shift for ii in interactions["1-2"]],
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx,
+                    omm.AmoebaMultipoleForce.PolarizationCovalent13,
+                    [ii + index_shift for ii in interactions["1-3"]],
+                )
+                amoeba_force.setCovalentMap(
+                    particle_idx,
+                    omm.AmoebaMultipoleForce.PolarizationCovalent14,
+                    [ii + index_shift for ii in interactions["1-4"]],
+                )
 
                 # ljforce
                 cc = [eps, lamb, C6, Rvdw]
                 cc += [ct_eps, ct_lamb]
                 ljforce.addParticle(cc)  # pylint: disable=used-before-assignment
 
-            for p in ['1-2', '1-3', '1-4', '1-5']:
+            for p in ["1-2", "1-3", "1-4", "1-5"]:
                 for i, j in pairs[p]:
                     ljforce.addExclusion(i + index_shift, j + index_shift)
 
-            for i, j in pairs['1-4']:
-                Rvdw_i, Rvdw_j = params['Rvdw'][i], params['Rvdw'][j]
-                lamb_i, lamb_j = params['lamb'][i], params['lamb'][j]
-                eps_i, eps_j = params['eps'][i], params['eps'][j]
-                C6_i, C6_j = params['C6'][i], params['C6'][j]
+            for i, j in pairs["1-4"]:
+                Rvdw_i, Rvdw_j = params["Rvdw"][i], params["Rvdw"][j]
+                lamb_i, lamb_j = params["lamb"][i], params["lamb"][j]
+                eps_i, eps_j = params["eps"][i], params["eps"][j]
+                C6_i, C6_j = params["C6"][i], params["C6"][j]
                 lamb_ij = np.sqrt(lamb_i * lamb_j)
                 C6_ij = np.sqrt(C6_i * C6_j)
                 r_ij = 0.5 * (Rvdw_i + Rvdw_j)
                 eps_ij = np.sqrt(eps_i * eps_j)
                 lj14force.addBond(i + index_shift, j + index_shift, [eps_ij, lamb_ij, C6_ij, r_ij, lj14scale])
 
-            for i, j in pairs['1-5']:
-                Rvdw_i, Rvdw_j = params['Rvdw'][i], params['Rvdw'][j]
-                lamb_i, lamb_j = params['lamb'][i], params['lamb'][j]
-                eps_i, eps_j = params['eps'][i], params['eps'][j]
-                C6_i, C6_j = params['C6'][i], params['C6'][j]
+            for i, j in pairs["1-5"]:
+                Rvdw_i, Rvdw_j = params["Rvdw"][i], params["Rvdw"][j]
+                lamb_i, lamb_j = params["lamb"][i], params["lamb"][j]
+                eps_i, eps_j = params["eps"][i], params["eps"][j]
+                C6_i, C6_j = params["C6"][i], params["C6"][j]
                 lamb_ij = np.sqrt(lamb_i * lamb_j)
                 C6_ij = np.sqrt(C6_i * C6_j)
                 r_ij = 0.5 * (Rvdw_i + Rvdw_j)
@@ -234,13 +248,13 @@ def generate_openmm_system(top_file,
             index_shift += natoms
 
     if unit_cell is not None:
-        logger.info('use PME')
+        logger.info("use PME")
         amoeba_force.setNonbondedMethod(omm.AmoebaMultipoleForce.PME)
-        amoeba_force.setEwaldErrorTolerance(5.e-5)
+        amoeba_force.setEwaldErrorTolerance(5.0e-5)
         amoeba_force.setCutoffDistance(cutoff)  # nm
         ljforce.setNonbondedMethod(omm.CustomNonbondedForce.CutoffPeriodic)
         ljforce.setCutoffDistance(cutoff)  # nm
-        logger.info('use long range correction')
+        logger.info("use long range correction")
         ljforce.setUseLongRangeCorrection(True)
     else:
         amoeba_force.setNonbondedMethod(omm.AmoebaMultipoleForce.NoCutoff)
@@ -250,8 +264,8 @@ def generate_openmm_system(top_file,
     amoeba_force.setMutualInducedMaxIterations(100)
     amoeba_force.setMutualInducedTargetEpsilon(1e-5)
 
-    logger.info(f'amoeba force num multipoles {amoeba_force.getNumMultipoles()}')
-    logger.info(f'amoeba force nonbonded method {amoeba_force.getNonbondedMethod()}')
+    logger.info(f"amoeba force num multipoles {amoeba_force.getNumMultipoles()}")
+    logger.info(f"amoeba force nonbonded method {amoeba_force.getNonbondedMethod()}")
 
     system.addForce(amoeba_force)
     system.addForce(ljforce)
@@ -261,30 +275,33 @@ def generate_openmm_system(top_file,
 
 
 class AmoebaCalculator(BaseCalculator):
-
     implemented_properties = ["energy", "forces"]
 
-    def __init__(self,
-                 top_file: str,
-                 nonbonded_params: dict,
-                 *,
-                 platform_name: str = 'CPU',
-                 separate_terms: bool = False,
-                 apply_constraints: bool = False,
-                 unit_cell=None,
-                 cutoff=1.0):
+    def __init__(
+        self,
+        top_file: str,
+        nonbonded_params: dict,
+        *,
+        platform_name: str = "CPU",
+        separate_terms: bool = False,
+        apply_constraints: bool = False,
+        unit_cell=None,
+        cutoff=1.0,
+    ):
         super().__init__()
 
-        assert platform_name in ['CPU', 'Reference', 'CUDA']
+        assert platform_name in ["CPU", "Reference", "CUDA"]
 
         self.system: omm.System = None
 
-        self.top, self.system = generate_openmm_system(top_file, nonbonded_params, unit_cell=unit_cell, cutoff=cutoff)
+        self.top, self.system = generate_byteffpol_system(
+            top_file, nonbonded_params, unit_cell=unit_cell, cutoff=cutoff
+        )
 
         self.integrator = omm.VerletIntegrator(0.001 * openmm_unit.picoseconds)
         self.platform = omm.Platform.getPlatformByName(platform_name)
-        if platform_name == 'CUDA':
-            self.platform.setPropertyDefaultValue('Precision', 'mixed')
+        if platform_name == "CUDA":
+            self.platform.setPropertyDefaultValue("Precision", "mixed")
 
         if separate_terms:
             self.forcegroups = {}
@@ -295,7 +312,7 @@ class AmoebaCalculator(BaseCalculator):
                 force.setForceGroup(i)
                 self.forcegroups[force] = (i, force.getName())
 
-            logger.debug('recording separate energy contributions: %s', self.forcegroups)
+            logger.debug("recording separate energy contributions: %s", self.forcegroups)
         else:
             self.forcegroups = None
             self.separate_forces = None
@@ -310,8 +327,7 @@ class AmoebaCalculator(BaseCalculator):
         return
 
     def _calculate_without_restraint(self, coords: np.ndarray) -> T.Tuple[np.ndarray, np.ndarray]:
-        """ Calculate force field energy and force in openmm.
-        """
+        """Calculate force field energy and force in openmm."""
 
         assert coords.shape[0] == self._n_atoms
         self.simulation.context.setPositions(coords / 10)  # angstrom to nm
@@ -341,7 +357,7 @@ class AmoebaCalculator(BaseCalculator):
         return dipoles
 
     def get_separate_terms(self) -> T.Tuple[T.Dict, T.Dict]:
-        '''return each energy & force terms in kcal, mol, A unit'''
+        """return each energy & force terms in kcal, mol, A unit"""
         assert self.forcegroups is not None
         # openmm uses kj/mol, nm. convert to kcal/mol, A
         self.separate_energy = {}
@@ -349,8 +365,9 @@ class AmoebaCalculator(BaseCalculator):
         for _, (i, name) in self.forcegroups.items():
             state = self.simulation.context.getState(getEnergy=True, getForces=True, groups=2**i)  # pylint: disable=E1123
             energy = state.getPotentialEnergy().value_in_unit(openmm_unit.kilocalorie_per_mole)
-            forces = state.getForces(asNumpy=True).value_in_unit(openmm_unit.kilocalories_per_mole /
-                                                                 openmm_unit.angstroms)
+            forces = state.getForces(asNumpy=True).value_in_unit(
+                openmm_unit.kilocalories_per_mole / openmm_unit.angstroms
+            )
             if name in self.separate_forces:
                 self.separate_energy[name] += energy
                 self.separate_forces[name] += forces
@@ -361,7 +378,7 @@ class AmoebaCalculator(BaseCalculator):
         return self.separate_energy, self.separate_forces
 
     def serialize(self, xml_path: str) -> None:
-        with open(xml_path, 'w') as output_file:
+        with open(xml_path, "w") as output_file:
             xml_serialized_system = omm.XmlSerializer.serialize(self.system)
             output_file.write(xml_serialized_system)
         return
@@ -372,7 +389,7 @@ class AmoebaCalculator(BaseCalculator):
 
     @property
     def last_openmm_positions(self) -> np.ndarray:
-        '''return actual openmm positions in A unit'''
+        """return actual openmm positions in A unit"""
         return self._last_positions
 
     @property

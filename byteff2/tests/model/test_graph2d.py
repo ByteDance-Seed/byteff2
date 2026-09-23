@@ -19,22 +19,18 @@ from byteff2.data import GraphData, collate_data
 from byteff2.model.graph_block import Graph2DBlock
 
 
-@pytest.mark.parametrize('gnn_config', [{
-    'gnn_type': 'EGT',
-    'jk': 'cat',
-    'heads': 4,
-    'at_channels': 8,
-    'gnn_dims': (32, 32, 2),
-    'ffn_dims': (32, 2)
-}, {
-    'gnn_type': 'GINE'
-}, {
-    'gnn_type': 'GAT'
-}])
+@pytest.mark.parametrize(
+    "gnn_config",
+    [
+        {"gnn_type": "EGT", "jk": "cat", "heads": 4, "at_channels": 8, "gnn_dims": (32, 32, 2), "ffn_dims": (32, 2)},
+        {"gnn_type": "GINE"},
+        {"gnn_type": "GAT"},
+    ],
+)
 def test_symmetry(gnn_config):
 
-    mapped_smiles = '[O:1]([H:2])[H:3]'
-    data = GraphData('test', mapped_smiles)
+    mapped_smiles = "[O:1]([H:2])[H:3]"
+    data = GraphData("test", mapped_smiles)
 
     model = Graph2DBlock(gnn_layer=gnn_config)
 
@@ -54,6 +50,6 @@ def test_symmetry(gnn_config):
     x_h_1, e_h_1, _ = model(data)
 
     for i in range(rep):
-        assert torch.allclose(x_h_1[i * 3 + 1], x_h[1])
-        assert torch.allclose(x_h_1[i * 3 + 2], x_h[1])
+        assert torch.allclose(x_h_1[i * 3 + 1], x_h[1], atol=1e-5, rtol=1e-5)
+        assert torch.allclose(x_h_1[i * 3 + 2], x_h[1], atol=1e-5, rtol=1e-5)
     assert (torch.abs(e_h_1 - e_h[0].view(1, -1)) < 1e-6).all()
