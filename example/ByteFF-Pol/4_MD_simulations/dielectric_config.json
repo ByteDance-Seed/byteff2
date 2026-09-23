@@ -1,0 +1,17 @@
+{
+    "protocol": "Dielectric",
+    "params_dir": "dielectric_params",
+    "output_dir": "dielectric_results",
+    "working_dir": "dielectric_working_dir",
+    "temperature": 298,
+    "natoms": 5000,
+    "npt_steps": 2000000,
+    "nvt_steps": 8000000,
+    "dipole_interval": 1000,
+    "components": {
+        "DMC": 1
+    },
+    "smiles": {
+        "DMC": "COC(=O)OC"
+    }
+}

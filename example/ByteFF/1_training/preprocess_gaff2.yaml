@@ -1,0 +1,24 @@
+data_cls: HessianData
+meta_fp: ./work/gaff2_am1bcc_hessian_example.csv
+save_dir: pretrain_preprocessed
+
+# pickle kyes: h5 keys
+moldata:
+  sigma: sigma
+  epsilon: epsilon
+  atomic_charge: atomic_charge
+  bond_k: bond_k
+  bond_r0: bond_length
+  angle_k: angle_k
+  angle_d0: angle_theta
+  proper_k: propertorsion_k
+  improper_k: impropertorsion_k
+
+
+confdata:
+  coords: coords
+  hessian: hessian
+
+kwargs:
+  max_n_confs: 1
+shards: 1

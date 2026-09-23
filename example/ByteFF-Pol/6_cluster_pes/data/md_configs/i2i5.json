@@ -1,0 +1,18 @@
+{
+    "protocol": "Density",
+    "params_dir": "data/md_trj/param_i2i5",
+    "output_dir": "data/md_trj/results_i2i5",
+    "working_dir": "data/md_trj/results_i2i5",
+    "temperature": 298,
+    "natoms": 5000,
+    "components": {
+        "DMC": 5,
+        "LI": 1,
+        "FSI": 1
+    },
+    "smiles": {
+        "DMC": "COC(=O)OC",
+        "LI": "[Li+]",
+        "FSI": "O=S(=O)(F)[N-]S(=O)(=O)F"
+    }
+}

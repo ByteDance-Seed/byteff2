@@ -1,0 +1,20 @@
+{
+    "protocol": "Density",
+    "params_dir": "data/md_trj/param_n1n3n4",
+    "output_dir": "data/md_trj/results_n1n3n4",
+    "working_dir": "data/md_trj/results_n1n3n4",
+    "temperature": 298,
+    "natoms": 5000,
+    "components": {
+        "NOM": 100,
+        "EtCl": 100,
+        "EtSH": 100,
+        "An": 100
+    },
+    "smiles": {
+        "NOM": "C[N+](=O)[O-]",
+        "EtCl": "CCCl",
+        "EtSH": "CCS",
+        "An": "Nc1ccccc1"
+    }
+}

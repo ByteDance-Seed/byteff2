@@ -1,0 +1,15 @@
+{
+    "protocol": "Compressibility",
+    "params_dir": "compressibility_params",
+    "output_dir": "compressibility_results",
+    "working_dir": "compressibility_working_dir",
+    "temperature": 298,
+    "natoms": 5000,
+    "npt_steps": 5000000,
+    "components": {
+        "DMC": 1
+    },
+    "smiles": {
+        "DMC": "COC(=O)OC"
+    }
+}

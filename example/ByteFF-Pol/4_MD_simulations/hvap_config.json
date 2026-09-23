@@ -1,0 +1,14 @@
+{
+    "protocol": "HVap",
+    "params_dir": "hvap_params",
+    "output_dir": "hvap_results",
+    "working_dir": "hvap_working_dir",
+    "temperature": 298,
+    "natoms": 5000,
+    "components": {
+        "ACT": 1
+    },
+    "smiles": {
+        "ACT": "CC(C)=O"
+    }
+}

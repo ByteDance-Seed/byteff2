@@ -1,0 +1,14 @@
+data_cls: MonoData
+meta_asset: ByteFF-26/data/training/torsion/torsion_example.csv
+save_dir: train_preprocessed
+
+moldata:
+  torsion_ids: torsion_atom_indices
+confdata:
+  coords: coords
+  energy: energy
+  forces: forces
+
+kwargs:
+  max_n_confs: 1
+shards: 1
