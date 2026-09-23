@@ -12,38 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
+
 import pytest
 import torch
 
 from byteff2.data import GraphData
+from byteff2.model import EnsembleModel, HybridFF
 from byteff2.model.ff_layers import PreChargeVolume
 from byteff2.model.graph_block import Graph2DBlock
 
 
-@pytest.mark.parametrize('feature_config', [{
-    'atom_embedding_dim': 16,
-    'connectivity_embedding_dim': 8,
-    'ring_con_embedding_dim': 8,
-    'min_ring_size_embedding_dim': 8,
-    'fm_chg_embedding_dim': 8,
-    'bond_ring_embedding_dim': 8,
-    'bond_order_embedding_dim': 8,
-    'scale_grad_by_freq': False,
-    'node_mlp_dims': [32, 32, 3],
-    'edge_mlp_dims': [32, 32, 3],
-    'act': 'gelu'
-}])
-@pytest.mark.parametrize('gnn_config', [{
-    'gnn_type': 'GINE',
-    'gnn_dims': [32, 32, 3],
-    'jk': None,
-    'act': 'gelu',
-}])
-@pytest.mark.parametrize('mapped_smiles',
-                         ['[O:1]([H:2])[H:3]', '[C:1]([C:2]([O:3][H:9])([H:7])[H:8])([H:4])([H:5])[H:6]'])
+@pytest.mark.parametrize(
+    "feature_config",
+    [
+        {
+            "atom_embedding_dim": 16,
+            "connectivity_embedding_dim": 8,
+            "ring_con_embedding_dim": 8,
+            "min_ring_size_embedding_dim": 8,
+            "fm_chg_embedding_dim": 8,
+            "bond_ring_embedding_dim": 8,
+            "bond_order_embedding_dim": 8,
+            "scale_grad_by_freq": False,
+            "node_mlp_dims": [32, 32, 3],
+            "edge_mlp_dims": [32, 32, 3],
+            "act": "gelu",
+        }
+    ],
+)
+@pytest.mark.parametrize(
+    "gnn_config",
+    [
+        {
+            "gnn_type": "GINE",
+            "gnn_dims": [32, 32, 3],
+            "jk": None,
+            "act": "gelu",
+        }
+    ],
+)
+@pytest.mark.parametrize(
+    "mapped_smiles", ["[O:1]([H:2])[H:3]", "[C:1]([C:2]([O:3][H:9])([H:7])[H:8])([H:4])([H:5])[H:6]"]
+)
 def test_symmetry(feature_config, gnn_config, mapped_smiles):
 
-    data = GraphData('test', mapped_smiles)
+    data = GraphData("test", mapped_smiles)
     model = Graph2DBlock(feature_config, gnn_config)
 
     x_h, e_h, _ = model(data)
@@ -85,11 +99,96 @@ def test_symmetry(feature_config, gnn_config, mapped_smiles):
     charge_dict = {}
     for i, equiv in enumerate(equi_node):
         if equiv not in charge_dict:
-            charge_dict[equiv] = params['PreChargeVolume.charges'][i]
+            charge_dict[equiv] = params["PreChargeVolume.charges"][i]
         else:
-            assert torch.allclose(params['PreChargeVolume.charges'][i], charge_dict[equiv], atol=1e-6)
+            assert torch.allclose(params["PreChargeVolume.charges"][i], charge_dict[equiv], atol=1e-6)
 
     # test total charge
 
     formal_charges = data.node_features[:, 2]
-    assert (params['PreChargeVolume.charges'].sum() - sum(formal_charges)).abs() < 1e-6
+    assert (params["PreChargeVolume.charges"].sum() - sum(formal_charges)).abs() < 1e-6
+
+
+def _minimal_hybridff():
+    return HybridFF(
+        graph_block={
+            "feature_layer": {
+                "atom_embedding_dim": 8,
+                "connectivity_embedding_dim": 4,
+                "ring_con_embedding_dim": 4,
+                "min_ring_size_embedding_dim": 4,
+                "fm_chg_embedding_dim": 4,
+                "bond_ring_embedding_dim": 4,
+                "bond_order_embedding_dim": 4,
+                "node_mlp_dims": [16, 16, 2],
+                "edge_mlp_dims": [16, 16, 2],
+                "act": "gelu",
+            },
+            "gnn_layer": {
+                "gnn_type": "GINE",
+                "gnn_dims": [16, 16, 2],
+                "jk": None,
+                "act": "gelu",
+            },
+        },
+        ff_block=[
+            {
+                "type": "ChargeVolume",
+                "pre_mlp_dims": [16, 16, 2],
+                "out_mlp_dims": [16, 3],
+                "act": "gelu",
+            }
+        ],
+        supported_elements=[1, 6, 8],
+    )
+
+
+def test_hybridff_allows_supported_elements_in_eval():
+    model = _minimal_hybridff().eval()
+    data = GraphData("water", "[O:1]([H:2])[H:3]")
+
+    preds = model(data, skip_ff=True)
+
+    assert "ff_parameters" in preds
+
+
+def test_hybridff_rejects_unsupported_elements_in_eval():
+    model = _minimal_hybridff().eval()
+    data = GraphData("pf6", "[P-:1]([F:2])([F:3])([F:4])([F:5])([F:6])[F:7]")
+
+    with pytest.raises(ValueError, match=r"unsupported atomic numbers.*9, 15"):
+        model(data, skip_ff=True)
+
+
+def test_hybridff_can_skip_repeated_element_validation_in_eval():
+    model = _minimal_hybridff().eval()
+    data = GraphData("pf6", "[P-:1]([F:2])([F:3])([F:4])([F:5])([F:6])[F:7]")
+
+    preds = model(data, skip_ff=True, validate_elements=False)
+
+    assert "ff_parameters" in preds
+
+
+def test_hybridff_skips_atomic_number_check_in_train_mode():
+    model = _minimal_hybridff().train()
+    data = GraphData("pf6", "[P-:1]([F:2])([F:3])([F:4])([F:5])([F:6])[F:7]")
+
+    preds = model(data, skip_ff=True, validate_elements=False)
+
+    assert "ff_parameters" in preds
+
+
+def test_ensemble_model_propagates_validate_elements_argument():
+    parameter = inspect.signature(EnsembleModel.__call__).parameters["validate_elements"]
+    calls = []
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+    class FakeModel:
+        def __call__(self, _data, *, validate_elements):
+            calls.append(validate_elements)
+            return {"ff_parameters": {"value": torch.tensor([1.0])}}
+
+    EnsembleModel([FakeModel(), FakeModel()])(object(), validate_elements=False)
+
+    assert calls == [False, False]

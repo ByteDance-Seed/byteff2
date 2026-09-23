@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright (c) 2023 PyG Team <team@pyg.org>
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates.
 # SPDX-License-Identifier: MIT
@@ -16,9 +30,9 @@ import math
 import typing as T
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from torch.nn import LayerNorm, Linear, ModuleList
+import torch.nn.functional as F
 from torch_geometric.nn.conv import GATConv, GATv2Conv, GINEConv, MessagePassing
 from torch_geometric.nn.models import MLP
 from torch_geometric.nn.models.jumping_knowledge import JumpingKnowledge
@@ -26,6 +40,7 @@ from torch_geometric.nn.resolver import activation_resolver, normalization_resol
 from torch_geometric.typing import Adj, OptTensor
 from torch_geometric.utils import scatter, softmax
 from torch_geometric.utils._trim_to_layer import TrimToLayer
+
 
 # TODO rewrite MessagePassing
 
@@ -64,6 +79,7 @@ class BasicGNN(torch.nn.Module):
         **kwargs (optional): Additional arguments of the underlying
             :class:`torch_geometric.nn.conv.MessagePassing` layers.
     """
+
     supports_edge_attr: bool
     supports_edge_update: bool
 
@@ -132,11 +148,11 @@ class BasicGNN(torch.nn.Module):
             if jk is not None:
                 self.norms.append(copy.deepcopy(norm_layer))
 
-        if jk is not None and jk != 'last':
+        if jk is not None and jk != "last":
             self.jk = JumpingKnowledge(jk, hidden_channels, num_layers)
 
         if jk is not None:
-            if jk == 'cat':
+            if jk == "cat":
                 in_channels = num_layers * hidden_channels
             else:
                 in_channels = hidden_channels
@@ -155,9 +171,9 @@ class BasicGNN(torch.nn.Module):
             conv.reset_parameters()
         for norm in self.norms or []:
             norm.reset_parameters()
-        if hasattr(self, 'jk'):
+        if hasattr(self, "jk"):
             self.jk.reset_parameters()
-        if hasattr(self, 'lin'):
+        if hasattr(self, "lin"):
             self.lin.reset_parameters()
 
     def forward(
@@ -178,7 +194,6 @@ class BasicGNN(torch.nn.Module):
 
         xs: T.List[Tensor] = []
         for i in range(self.num_layers):
-
             if self.supports_edge_update:
                 x, edge_attr = self.convs[i](x, edge_index, edge_attr=edge_attr)
             elif self.supports_edge_attr:
@@ -194,11 +209,11 @@ class BasicGNN(torch.nn.Module):
             if self.act is not None and not self.act_first:
                 x = self.act(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
-            if hasattr(self, 'jk'):
+            if hasattr(self, "jk"):
                 xs.append(x)
 
-        x = self.jk(xs) if hasattr(self, 'jk') else x
-        x = self.lin(x) if hasattr(self, 'lin') else x
+        x = self.jk(xs) if hasattr(self, "jk") else x
+        x = self.lin(x) if hasattr(self, "lin") else x
 
         if self.supports_edge_update:
             return x, edge_attr, xs
@@ -206,8 +221,7 @@ class BasicGNN(torch.nn.Module):
             return x, xs
 
     def __repr__(self) -> str:
-        return (f'{self.__class__.__name__}({self.in_channels}, '
-                f'{self.out_channels}, num_layers={self.num_layers})')
+        return f"{self.__class__.__name__}({self.in_channels}, {self.out_channels}, num_layers={self.num_layers})"
 
 
 class GINE(BasicGNN):
@@ -243,6 +257,7 @@ class GINE(BasicGNN):
         **kwargs (optional): Additional arguments of
             :class:`torch_geometric.nn.conv.GINConv`.
     """
+
     supports_edge_update = False
     supports_edge_attr = True
 
@@ -294,24 +309,27 @@ class GAT(BasicGNN):
             :class:`torch_geometric.nn.conv.GATConv` or
             :class:`torch_geometric.nn.conv.GATv2Conv`.
     """
+
     supports_edge_update = False
     supports_edge_attr = True
 
     def init_conv(self, in_channels: T.Union[int, T.Tuple[int, int]], out_channels: int, **kwargs) -> MessagePassing:
 
-        v2 = kwargs.pop('v2', False)
-        heads = kwargs.pop('heads', 1)
-        concat = kwargs.pop('concat', True)
+        v2 = kwargs.pop("v2", False)
+        heads = kwargs.pop("heads", 1)
+        concat = kwargs.pop("concat", True)
 
         # Do not use concatenation in case the layer `GATConv` layer maps to
         # the desired output channels (out_channels != None and jk != None):
-        if getattr(self, '_is_conv_to_out', False):
+        if getattr(self, "_is_conv_to_out", False):
             concat = False
 
         if concat and out_channels % heads != 0:
-            raise ValueError(f"Ensure that the number of output channels of "
-                             f"'GATConv' (got '{out_channels}') is divisible "
-                             f"by the number of heads (got '{heads}')")
+            raise ValueError(
+                f"Ensure that the number of output channels of "
+                f"'GATConv' (got '{out_channels}') is divisible "
+                f"by the number of heads (got '{heads}')"
+            )
 
         if concat:
             out_channels = out_channels // heads
@@ -331,13 +349,13 @@ class GTConv(MessagePassing):  # pylint: disable=abstract-method
         out_channels: int,
         heads: int = 1,
         at_channels: int = 16,
-        dropout: float = 0.,
+        dropout: float = 0.0,
         ffn_dims: T.Optional[list[int]] = None,
         scale_by_degree: bool = False,
         act: str = None,
         **kwargs,
     ):
-        kwargs.setdefault('aggr', 'add')
+        kwargs.setdefault("aggr", "add")
         super().__init__(node_dim=0, **kwargs)
 
         self.in_channels = in_channels
@@ -357,12 +375,14 @@ class GTConv(MessagePassing):  # pylint: disable=abstract-method
 
         self.ffn = None
         if ffn_dims is not None:
-            self.ffn = MLP(in_channels=in_channels,
-                           hidden_channels=ffn_dims[0],
-                           out_channels=out_channels,
-                           num_layers=ffn_dims[1],
-                           act=act,
-                           norm=None)
+            self.ffn = MLP(
+                in_channels=in_channels,
+                hidden_channels=ffn_dims[0],
+                out_channels=out_channels,
+                num_layers=ffn_dims[1],
+                act=act,
+                norm=None,
+            )
 
         self.reset_parameters()
 
@@ -377,7 +397,7 @@ class GTConv(MessagePassing):  # pylint: disable=abstract-method
             self.ffn.reset_parameters()
 
     def forward(self, x: Tensor, edge_index: Adj):
-        r"""Runs the forward pass of the module. """
+        r"""Runs the forward pass of the module."""
 
         H, C = self.heads, self.at_channels
 
@@ -399,15 +419,16 @@ class GTConv(MessagePassing):  # pylint: disable=abstract-method
 
         return out
 
-    def message(self, query_i: Tensor, key_j: Tensor, value_j: Tensor, index: Tensor, ptr: OptTensor,
-                size_i: T.Optional[int]) -> Tensor:
+    def message(
+        self, query_i: Tensor, key_j: Tensor, value_j: Tensor, index: Tensor, ptr: OptTensor, size_i: T.Optional[int]
+    ) -> Tensor:
 
         alpha = (query_i * key_j).sum(dim=-1) / math.sqrt(self.at_channels)  # [nedge, head]
         alpha = softmax(alpha, index, ptr, size_i)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
         if self.scale_by_degree:
-            degree = scatter(torch.ones_like(index), index, 0, reduce='sum')
+            degree = scatter(torch.ones_like(index), index, 0, reduce="sum")
             degree = degree.index_select(0, index)
             alpha *= degree.to(alpha.dtype).unsqueeze(-1)
 
@@ -417,8 +438,7 @@ class GTConv(MessagePassing):  # pylint: disable=abstract-method
         return out
 
     def __repr__(self) -> str:
-        return (f'{self.__class__.__name__}({self.in_channels}, '
-                f'{self.out_channels}, heads={self.heads})')
+        return f"{self.__class__.__name__}({self.in_channels}, {self.out_channels}, heads={self.heads})"
 
 
 class EGTConv(MessagePassing):  # pylint: disable=abstract-method
@@ -432,13 +452,13 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         out_channels: int,
         heads: int = 1,
         at_channels: int = 16,
-        dropout: float = 0.,
+        dropout: float = 0.0,
         ffn_dims: T.Optional[list[int]] = None,
         scale_by_degree: bool = False,
         act: str = None,
         **kwargs,
     ):
-        kwargs.setdefault('aggr', 'add')
+        kwargs.setdefault("aggr", "add")
         super().__init__(node_dim=0, **kwargs)
 
         self.in_channels = in_channels
@@ -464,18 +484,22 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         self.ffn = None
         self.ffn_edge = None
         if ffn_dims is not None:
-            self.ffn = MLP(in_channels=in_channels,
-                           hidden_channels=ffn_dims[0],
-                           out_channels=out_channels,
-                           num_layers=ffn_dims[1],
-                           act=act,
-                           norm=None)
-            self.ffn_edge = MLP(in_channels=in_channels,
-                                hidden_channels=ffn_dims[0],
-                                out_channels=out_channels,
-                                num_layers=ffn_dims[1],
-                                act=act,
-                                norm=None)
+            self.ffn = MLP(
+                in_channels=in_channels,
+                hidden_channels=ffn_dims[0],
+                out_channels=out_channels,
+                num_layers=ffn_dims[1],
+                act=act,
+                norm=None,
+            )
+            self.ffn_edge = MLP(
+                in_channels=in_channels,
+                hidden_channels=ffn_dims[0],
+                out_channels=out_channels,
+                num_layers=ffn_dims[1],
+                act=act,
+                norm=None,
+            )
 
         self._edge_alpha = None
 
@@ -499,7 +523,7 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
             self.ffn_edge.reset_parameters()
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor):
-        r"""Runs the forward pass of the module. """
+        r"""Runs the forward pass of the module."""
 
         H, C = self.heads, self.at_channels
 
@@ -515,13 +539,9 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         edge_embedding = self.lin_edge(edge_attr)
 
         # multi-head attention
-        x = self.propagate(edge_index,
-                           query=query,
-                           key=key,
-                           value=value,
-                           size=None,
-                           gate=gate,
-                           edge_embedding=edge_embedding)
+        x = self.propagate(
+            edge_index, query=query, key=key, value=value, size=None, gate=gate, edge_embedding=edge_embedding
+        )
         x = x.view(-1, H * C)
         x = self.lin_proj(x) + x0
         x1 = x.clone()
@@ -537,8 +557,17 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         edge_attr = self.ffn_edge(self.norm2_edge(edge_attr0)) + edge_attr1
         return out, edge_attr
 
-    def message(self, query_i: Tensor, key_j: Tensor, value_j: Tensor, index: Tensor, ptr: OptTensor,
-                size_i: T.Optional[int], gate: Tensor, edge_embedding: Tensor) -> Tensor:
+    def message(
+        self,
+        query_i: Tensor,
+        key_j: Tensor,
+        value_j: Tensor,
+        index: Tensor,
+        ptr: OptTensor,
+        size_i: T.Optional[int],
+        gate: Tensor,
+        edge_embedding: Tensor,
+    ) -> Tensor:
 
         alpha = (query_i * key_j).sum(dim=-1) / math.sqrt(self.at_channels)  # [nedge, head]
         alpha += edge_embedding
@@ -547,7 +576,7 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
         if self.scale_by_degree:
-            degree = scatter(torch.ones_like(index), index, 0, reduce='sum')
+            degree = scatter(torch.ones_like(index), index, 0, reduce="sum")
             degree = degree.index_select(0, index)
             alpha *= degree.to(alpha.dtype).unsqueeze(-1)
 
@@ -557,8 +586,7 @@ class EGTConv(MessagePassing):  # pylint: disable=abstract-method
         return out
 
     def __repr__(self) -> str:
-        return (f'{self.__class__.__name__}({self.in_channels}, '
-                f'{self.out_channels}, heads={self.heads})')
+        return f"{self.__class__.__name__}({self.in_channels}, {self.out_channels}, heads={self.heads})"
 
 
 class GT(BasicGNN):
@@ -570,7 +598,7 @@ class GT(BasicGNN):
     supports_edge_update = False
 
     def init_conv(self, in_channels: T.Union[int, T.Tuple[int, int]], out_channels: int, **kwargs) -> MessagePassing:
-        assert self.norm is None, 'Layernorm has already added in GTConv'
+        assert self.norm is None, "Layernorm has already added in GTConv"
         return GTConv(in_channels=in_channels, out_channels=out_channels, dropout=self.dropout, act=self.act, **kwargs)
 
 
@@ -583,5 +611,5 @@ class EGT(BasicGNN):
     supports_edge_update = True
 
     def init_conv(self, in_channels: T.Union[int, T.Tuple[int, int]], out_channels: int, **kwargs) -> MessagePassing:
-        assert self.norm is None, 'Layernorm has already added in GTConv'
+        assert self.norm is None, "Layernorm has already added in GTConv"
         return EGTConv(in_channels=in_channels, out_channels=out_channels, dropout=self.dropout, act=self.act, **kwargs)

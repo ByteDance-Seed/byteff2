@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from bytemol.core import Molecule, MoleculeGraph, rkutil
+from byteff2.bytemol.core import Molecule, MoleculeGraph, rkutil
 
 
 def get_ring_info(mol_graph: MoleculeGraph):

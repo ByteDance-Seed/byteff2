@@ -14,8 +14,13 @@
 
 import multiprocessing as mp
 
+from byteff2.utils.assets import ASSET_ROOT_ENV, get_asset_path
 
-def set_default_mp_start_method(method='spawn'):
+
+__all__ = ["ASSET_ROOT_ENV", "get_asset_path", "set_default_mp_start_method"]
+
+
+def set_default_mp_start_method(method="spawn"):
     if mp.get_start_method(allow_none=True) is None:
         mp.set_start_method(method)
     else:

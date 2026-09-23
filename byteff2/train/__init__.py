@@ -12,5 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .trainer import FFTrainer, TrainConfig  # pylint: disable=E0401
-from .utils import load_model  # pylint: disable=E0401
+from .trainer import FFJointTrainer, FFTrainer, TrainConfig  # pylint: disable=E0401
+from .utils import load_model, load_pretrained_model  # pylint: disable=E0401
+
+
+__all__ = ["FFJointTrainer", "FFTrainer", "TrainConfig", "load_model", "load_pretrained_model"]

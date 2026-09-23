@@ -14,17 +14,20 @@
 
 from .base import FFLayer, PreFFLayer
 from .mm_bonded import MMBonded, MMBondedConj, PreMMBonded, PreMMBondedConj
+from .mm_nonbonded import LJEs, PreLJEs
 from .mm_tspol import ChargeVolume, Exp6Pol, PreChargeVolume, PreExp6Pol
 
 __all__ = [
-    'PreFFLayer',
-    'FFLayer',
-    'PreMMBonded',
-    'MMBonded',
-    'PreMMBondedConj',
-    'MMBondedConj',
-    'PreExp6Pol',
-    'Exp6Pol',
-    'PreChargeVolume',
-    'ChargeVolume',
+    "PreFFLayer",
+    "FFLayer",
+    "PreMMBonded",
+    "MMBonded",
+    "PreMMBondedConj",
+    "MMBondedConj",
+    "PreLJEs",
+    "LJEs",
+    "PreExp6Pol",
+    "Exp6Pol",
+    "PreChargeVolume",
+    "ChargeVolume",
 ]

@@ -33,7 +33,7 @@ def correlate_xy(in1: torch.Tensor, in2: torch.Tensor):
     assert N == len(in2)
     dim1 = in1.shape
     if len(dim1) == 1:
-        N1, = dim1
+        (N1,) = dim1
         D1 = 1
     elif len(dim1) == 2:
         N1, D1 = dim1
@@ -56,8 +56,8 @@ def correlate_xy(in1: torch.Tensor, in2: torch.Tensor):
     f1[1:] = Q - cm1[:-1] - cm2[:-1]
     f1[0] = Q
 
-    X = torch.fft.fft(x, n=2**(N * 2 - 1).bit_length(), dim=0)  # pylint: disable=not-callable
-    Y = torch.fft.fft(y, n=2**(N * 2 - 1).bit_length(), dim=0)  # pylint: disable=not-callable
+    X = torch.fft.fft(x, n=2 ** (N * 2 - 1).bit_length(), dim=0)  # pylint: disable=not-callable
+    Y = torch.fft.fft(y, n=2 ** (N * 2 - 1).bit_length(), dim=0)  # pylint: disable=not-callable
 
     X_Y_conj = torch.einsum("ij,ij->ij", X, torch.conj(Y))
     c12 = torch.fft.ifft(X_Y_conj, dim=0)  # pylint: disable=not-callable
@@ -78,33 +78,33 @@ def polyfit(x: torch.Tensor, y: torch.Tensor, deg: int):
 
 
 class OnsagerUnit:
-    mol = 6.022_140_76e+23
+    mol = 6.022_140_76e23
 
     # time
     ps = 1.0
-    fs = 1.e-3 * ps
-    ns = 1.e+3 * ps
-    s = 1.e+9 * ns
+    fs = 1.0e-3 * ps
+    ns = 1.0e3 * ps
+    s = 1.0e9 * ns
 
     # length
-    nm = 1.
-    angstrom = 1.e-1 * nm
-    cm = 1.e+7 * nm
-    m = 1.e+9 * nm
+    nm = 1.0
+    angstrom = 1.0e-1 * nm
+    cm = 1.0e7 * nm
+    m = 1.0e9 * nm
 
     # mass
-    amu = 1.
+    amu = 1.0
     g = mol * amu
-    kg = 1.e+3 * g
+    kg = 1.0e3 * g
 
     # temperature
-    K = 1.
+    K = 1.0
 
     # electric current
-    A = 1.
+    A = 1.0
 
     # energy
-    J = kg * (m / s)**2
+    J = kg * (m / s) ** 2
 
     # electricity
     Coulomb = s * A
@@ -119,7 +119,7 @@ class OnsagerUnit:
     Pa = J / m**3
 
     # viscosity
-    cP = 1.e-3 * Pa * s  # mPa*s
+    cP = 1.0e-3 * Pa * s  # mPa*s
 
     # const
     pbc_xi = 2.837297  # unitless
@@ -164,9 +164,9 @@ def Lambda_to_ionic_conductivity(Lambda: torch.Tensor, charges: torch.Tensor, N:
     # 10^-10 m^2/s -> mS/cm
     # MyNoteEq: 3.1
     # MyNoteEq: 1.7
-    Lambda_si = Lambda * (1.e-10 * unit.m**2 / unit.s)
+    Lambda_si = Lambda * (1.0e-10 * unit.m**2 / unit.s)
     L_si = Lambda_si * N / (V * unit.angstrom**3) / (unit.kB * T * unit.K)
-    sigma_si = unit.e**2 * charges.matmul(L_si).matmul(charges) / (1.e-3 * unit.Siemens / unit.cm)
+    sigma_si = unit.e**2 * charges.matmul(L_si).matmul(charges) / (1.0e-3 * unit.Siemens / unit.cm)
     return sigma_si
 
 
@@ -178,8 +178,8 @@ def Dself_to_ionic_conductivity(Dself: torch.Tensor, charges: torch.Tensor, coun
     # MyNoteEq: 1.7
     V_si = V * unit.angstrom**3
     kB_T = unit.kB * T * unit.K
-    sigma_si = unit.e**2 * torch.sum(charges**2 * Dself * counts) * (1.e-10 * unit.m**2 / unit.s) / (kB_T * V_si)
-    sigma_si /= (1.e-3 * unit.Siemens / unit.cm)
+    sigma_si = unit.e**2 * torch.sum(charges**2 * Dself * counts) * (1.0e-10 * unit.m**2 / unit.s) / (kB_T * V_si)
+    sigma_si /= 1.0e-3 * unit.Siemens / unit.cm
     return sigma_si
 
 
@@ -283,11 +283,11 @@ def X_matrices(xfrac: torch.Tensor, masses: torch.Tensor):
             xj = xfrac[j]
             ij = idxn[(i, j)]
 
-            matrix[ij, ij] += 1. / xj  # ij
+            matrix[ij, ij] += 1.0 / xj  # ij
             for r in range(n):
                 mr = masses[r]
                 ir = idxn[(i, r)]
-                matrix[ij, ir] += 1. / xn * mr / mn  # in
+                matrix[ij, ir] += 1.0 / xn * mr / mn  # in
             for k in range(n):
                 kj = idxn[(k, j)]
                 matrix[ij, kj] -= xi / xj
@@ -318,14 +318,13 @@ def fsc_self_diffusivity(T: float, viscosity: float, L: float) -> float:
     # T [K]; viscosity [cP]; L [angstrom]
     # D [10^10 m^2/s]
     coeff = unit.kB * (T * unit.K) * unit.pbc_xi / (6 * torch.pi * (viscosity * unit.cP) * unit.angstrom)
-    coeff /= (1.e-10 * unit.m**2 / unit.s)
+    coeff /= 1.0e-10 * unit.m**2 / unit.s
     return coeff / L
 
 
-def fsc_full_Lambda(dfsc: Union[float, torch.Tensor],
-                    Xinv: torch.Tensor,
-                    masses: torch.Tensor,
-                    Gamma: torch.Tensor = None):
+def fsc_full_Lambda(
+    dfsc: Union[float, torch.Tensor], Xinv: torch.Tensor, masses: torch.Tensor, Gamma: torch.Tensor = None
+):
     # MyNoteEq: 4.3
     # MyNoteEq: 4.4
     # dfsc: float or n-1 dim
@@ -365,8 +364,9 @@ def fsc_full_Lambda(dfsc: Union[float, torch.Tensor],
 unit = OnsagerUnit()
 
 
-def onsager_calc(species_order, species_mass, species_number, species_charge, volume_angstrom3, viscosity_cP, T_K,
-                 positions):
+def onsager_calc(
+    species_order, species_mass, species_number, species_charge, volume_angstrom3, viscosity_cP, T_K, positions
+):
 
     dtype = torch.float64
     nsp = len(species_mass)
@@ -394,7 +394,7 @@ def onsager_calc(species_order, species_mass, species_number, species_charge, vo
     Charges = torch.tensor(list(species_charge.values()), dtype=dtype)
     AtomRanges = torch.tensor(gro_range_list)
     BoxVolume = volume_angstrom3
-    BoxLen = BoxVolume**(1 / 3)
+    BoxLen = BoxVolume ** (1 / 3)
     logger.info(f"Inferred cubic box length [angstrom]: {BoxLen}")
     Viscosity = viscosity_cP
     RoomT = T_K
@@ -418,16 +418,16 @@ def onsager_calc(species_order, species_mass, species_number, species_charge, vo
     Rxt, Ryt, Rzt = [], [], []
     msd_self = {}
     for i, sp in enumerate(species_mass):
-        x1 = xu[:, AtomRanges[i, 0]:AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
-        y1 = yu[:, AtomRanges[i, 0]:AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
-        z1 = zu[:, AtomRanges[i, 0]:AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
+        x1 = xu[:, AtomRanges[i, 0] : AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
+        y1 = yu[:, AtomRanges[i, 0] : AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
+        z1 = zu[:, AtomRanges[i, 0] : AtomRanges[i, 1]].reshape(-1, SpeciesCounts[i], NAtoms[i]).to(dtype)
 
         # self-diffusivity
         cmsx1 = torch.einsum("hij,j->hi", x1, AtomMFrac[i]) - origx[:, None]
         cmsy1 = torch.einsum("hij,j->hi", y1, AtomMFrac[i]) - origy[:, None]
         cmsz1 = torch.einsum("hij,j->hi", z1, AtomMFrac[i]) - origz[:, None]
 
-        msd1x, msd1y, msd1z = 0., 0., 0.
+        msd1x, msd1y, msd1z = 0.0, 0.0, 0.0
         for j in range(cmsx1.shape[1]):
             # print('NE', i, j)
             msd1x += correlate_xy(cmsx1[:, j], cmsx1[:, j])
@@ -448,7 +448,6 @@ def onsager_calc(species_order, species_mass, species_number, species_charge, vo
     kmsd_xy = torch.zeros((nsp, nsp), dtype=dtype)
 
     for i in range(nsp):
-
         for j in range(i, nsp):
             # print('Onsager', i, j)
             msd2x = correlate_xy(Rxt[i], Rxt[j])

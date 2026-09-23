@@ -12,5 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .gmxtool import ffparams_to_tfs
-from .hybridff_calculator import HybridFFCalculator
+from .gmxtool import ffparams_to_tfs as ffparams_to_tfs
+from .hybridff_calculator import HybridFFCalculator as HybridFFCalculator
+from .xtb_calculator import (
+    patch_hypervalent_bonded_params_for_write as patch_hypervalent_bonded_params_for_write,
+    xtb_optimized_coords as xtb_optimized_coords,
+    XTBCalculator as XTBCalculator,
+)

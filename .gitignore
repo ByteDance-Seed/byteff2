@@ -152,14 +152,22 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
-# PyCharm
+# Editor and local AI assistant config
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
-
 .vscode/
+.vscode-*/
+.codex/
+codex.json
+codex.toml
+.claude/
+.claude.json
+.claude.local.json
+claude.json
+claude.local.json
 *_temp**/
 tmp**
 temp**
@@ -209,6 +217,7 @@ temp**
 
 # byteff output
 missing_ffparam**/
+/.asset_migration_baseline/
 
 # evaluator temporary files
 **/stored_data/**
@@ -241,3 +250,6 @@ debug.ipynb
 **.gro
 **.yaml
 **.dcd
+
+**debug*
+*.md

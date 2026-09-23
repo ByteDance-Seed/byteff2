@@ -18,12 +18,13 @@ import random
 import torch
 from torch.utils.data import DataLoader
 
+from byteff2.bytemol.utils import get_data_file_path
 from byteff2.data import collate_data
 from byteff2.data.data import _count_idx
-from byteff2.utils.definitions import MMTERM_WIDTH, MMTerm
-from bytemol.utils import get_data_file_path
+from byteff2.utils.definitions import MMTerm, MMTERM_WIDTH
 
 from .test_dataset import create_mono_dataset
+
 
 logger = logging.getLogger(__name__)
 
@@ -43,32 +44,42 @@ def test_dataloader_mono(tmp_path):
     # test collate
     nums = torch.sum(batched_data.counts, dim=0)
 
-    assert batched_data.node_features.shape == (nums[_count_idx['node']], 5)
-    assert batched_data.edge_features.shape == (nums[_count_idx['edge']], 2)
+    assert batched_data.node_features.shape == (nums[_count_idx["node"]], 5)
+    assert batched_data.edge_features.shape == (nums[_count_idx["edge"]], 2)
 
     for term in MMTerm:
-        assert batched_data[f'inc_node_{term.name}'].shape[0] == batched_data[f'inc_edge_{term.name}'].shape[0] == nums[
-            _count_idx[term.name]]
-        assert batched_data[f'inc_node_{term.name}'].shape[
-            1] == batched_data[f'inc_edge_{term.name}'].shape[1] + 1 == MMTERM_WIDTH[term]
+        assert (
+            batched_data[f"inc_node_{term.name}"].shape[0]
+            == batched_data[f"inc_edge_{term.name}"].shape[0]
+            == nums[_count_idx[term.name]]
+        )
+        assert (
+            batched_data[f"inc_node_{term.name}"].shape[1]
+            == batched_data[f"inc_edge_{term.name}"].shape[1] + 1
+            == MMTERM_WIDTH[term]
+        )
 
-    assert batched_data.inc_node_nonbonded14.shape == (nums[_count_idx['nonbonded14']], 2)
-    assert batched_data.inc_node_nonbonded_all.shape == (nums[_count_idx['nonbonded_all']], 2)
+    assert batched_data.inc_node_nonbonded14.shape == (nums[_count_idx["nonbonded14"]], 2)
+    assert batched_data.inc_node_nonbonded_all.shape == (nums[_count_idx["nonbonded_all"]], 2)
 
     idx = random.randint(1, bs - 1)
     tdata = dataset[idx]
     assert (batched_data.counts[idx] == tdata.counts[0]).all()
-    node_inc = torch.cumsum(batched_data.counts[:, _count_idx['node']], 0)[idx - 1]
-    edge_inc = torch.cumsum(batched_data.counts[:, _count_idx['edge']], 0)[idx - 1]
+    node_inc = torch.cumsum(batched_data.counts[:, _count_idx["node"]], 0)[idx - 1]
+    edge_inc = torch.cumsum(batched_data.counts[:, _count_idx["edge"]], 0)[idx - 1]
     for term in MMTerm:
         nums = torch.cumsum(batched_data.counts[:, _count_idx[term.name]], 0)
-        assert (batched_data[f'inc_node_{term.name}'][nums[idx - 1]:nums[idx]] -
-                node_inc == tdata[f'inc_node_{term.name}']).all()
-        assert (batched_data[f'inc_edge_{term.name}'][nums[idx - 1]:nums[idx]] -
-                edge_inc == tdata[f'inc_edge_{term.name}']).all()
+        assert (
+            batched_data[f"inc_node_{term.name}"][nums[idx - 1] : nums[idx]] - node_inc
+            == tdata[f"inc_node_{term.name}"]
+        ).all()
+        assert (
+            batched_data[f"inc_edge_{term.name}"][nums[idx - 1] : nums[idx]] - edge_inc
+            == tdata[f"inc_edge_{term.name}"]
+        ).all()
 
     assert (batched_data.counts[idx] == tdata.counts[0]).all()
-    node_inc = torch.cumsum(batched_data.counts[:, _count_idx['node']], 0)
-    assert (batched_data.coords[node_inc[idx - 1]:node_inc[idx]] == tdata.coords).all()
-    assert (batched_data.forces[node_inc[idx - 1]:node_inc[idx]] == tdata.forces).all()
+    node_inc = torch.cumsum(batched_data.counts[:, _count_idx["node"]], 0)
+    assert (batched_data.coords[node_inc[idx - 1] : node_inc[idx]] == tdata.coords).all()
+    assert (batched_data.forces[node_inc[idx - 1] : node_inc[idx]] == tdata.forces).all()
     assert (batched_data.energy[idx] == tdata.energy[0]).all()

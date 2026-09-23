@@ -17,15 +17,16 @@ import logging
 import os
 from typing import Optional
 
+from MDAnalysis.lib.formats.libdcd import DCDFile
 import numpy as np
 import openmm as omm
 import openmm.app as app
+from openmm.app.gromacstopfile import GromacsTopFile
 import openmm.unit as ou
 import pandas as pd
-from MDAnalysis.lib.formats.libdcd import DCDFile
-from openmm.app.gromacstopfile import GromacsTopFile
 
-from bytemol.utils import temporary_cd
+from byteff2.bytemol.utils import temporary_cd
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,38 +38,40 @@ def openmm_run(
     positions: list[omm.Vec3],
     integrator: omm.Integrator,
     reporter: app.StateDataReporter = None,
-    work_dir: str = '.',
+    work_dir: str = ".",
     minimize: bool = False,
     box_vec: Optional[omm.Vec3] = None,
     steps: int = None,
-    temperature: float = 300.,
+    temperature: float = 300.0,
 ):
 
     with temporary_cd(work_dir):
         for i in range(system.getNumForces()):
             force = system.getForce(i)
-            force_group = 1 if isinstance(force, (omm.AmoebaMultipoleForce, omm.NonbondedForce,
-                                                  omm.CustomNonbondedForce)) else 0
+            force_group = (
+                1 if isinstance(force, (omm.AmoebaMultipoleForce, omm.NonbondedForce, omm.CustomNonbondedForce)) else 0
+            )
             force.setForceGroup(force_group)
             # you should only see these in output:
-            logger.info('system force %s, group %d', force.getName(), force.getForceGroup())
+            logger.info("system force %s, group %d", force.getName(), force.getForceGroup())
 
-        platform = omm.Platform.getPlatformByName('CUDA')
-        platform.setPropertyDefaultValue('Precision', 'mixed')
-        temperature = temperature * ou.kelvin  # Temperature for initial velocity
+        platform = omm.Platform.getPlatformByName("CUDA")
+        platform.setPropertyDefaultValue("Precision", "mixed")
         sim = app.Simulation(top.topology, system, integrator, platform)
         sim.context.setPositions(positions)
         if box_vec is not None:
             sim.context.setPeriodicBoxVectors(*box_vec)
         if minimize:
             # Minimize the energy
-            logger.info('Minimizing energy')
+            logger.info("Minimizing energy")
             sim.minimizeEnergy(
                 maxIterations=1000,
                 tolerance=10 * ou.kilojoules_per_mole / ou.nanometer,
             )
         # initialize temperature
-        sim.context.setVelocitiesToTemperature(temperature)
+        if temperature is not None:
+            temperature = temperature * ou.kelvin  # Temperature for initial velocity
+            sim.context.setVelocitiesToTemperature(temperature)
         if reporter is not None:
             if isinstance(reporter, list):
                 sim.reporters = reporter
@@ -76,9 +79,9 @@ def openmm_run(
                 sim.reporters.append(reporter)
 
         # Run dynamics
-        logger.info(f'Running {task_name}')
+        logger.info(f"Running {task_name}")
         sim.step(steps - sim.currentStep)
-        logger.info(f'{task_name} done')
+        logger.info(f"{task_name} done")
         # Get the state informations
         state = sim.context.getState(getPositions=True, enforcePeriodicBox=True)  # pylint: disable=unexpected-keyword-arg
         positions = state.getPositions()  # nm
@@ -92,7 +95,7 @@ def npt_run(
     positions: list[omm.Vec3],
     npt_steps=2000000,
     temperature: float = 300,
-    work_dir: str = '.',
+    work_dir: str = ".",
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
@@ -102,10 +105,11 @@ def npt_run(
     # default 4 ns
     barostat = omm.MonteCarloBarostat(pressure, temperature * ou.kelvin, frequency)
     system.addForce(barostat)
-    integrator = omm.MTSLangevinIntegrator(temperature * ou.kelvin, 0.1 / ou.picosecond, timestep * ou.femtoseconds,
-                                           [(0, 2), (1, 1)])
+    integrator = omm.MTSLangevinIntegrator(
+        temperature * ou.kelvin, 0.1 / ou.picosecond, timestep * ou.femtoseconds, [(0, 2), (1, 1)]
+    )
     state_reporter = app.StateDataReporter(
-        file=os.path.join(work_dir, 'npt_state.csv'),
+        file=os.path.join(work_dir, "npt_state.csv"),
         reportInterval=500,
         step=True,
         time=True,
@@ -119,18 +123,18 @@ def npt_run(
         remainingTime=False,
         speed=True,
         elapsedTime=False,
-        separator=',',
+        separator=",",
         systemMass=None,
         totalSteps=None,
         append=False,
     )
     dcd_reporter = app.DCDReporter(
-        os.path.join(work_dir, 'npt.dcd'),
+        os.path.join(work_dir, "npt.dcd"),
         reportInterval=500,
         enforcePeriodicBox=False,
     )
     return openmm_run(
-        task_name='npt',
+        task_name="npt",
         top=top,
         system=system,
         positions=positions,
@@ -149,15 +153,15 @@ def rescale_box(
     work_dir: str = None,
 ):
     # use average density
-    csv_file = os.path.join(work_dir, 'npt_state.csv')
+    csv_file = os.path.join(work_dir, "npt_state.csv")
     box = pd.read_csv(csv_file)["Box Volume (nm^3)"]
-    ave_length = np.mean(box[-500:])**(1 / 3)  # last 1 ns
+    ave_length = np.mean(box[-500:]) ** (1 / 3)  # last 1 ns
     scale = ave_length / box_vec[0].x
     positions *= scale
     new_box_vec = []
     for vec in box_vec:
         new_box_vec.append(omm.Vec3(vec.x * scale, vec.y * scale, vec.z * scale) * ou.nanometers)
-    logger.info('scale box by %.3f', scale)
+    logger.info("scale box by %.3f", scale)
     return positions, new_box_vec
 
 
@@ -171,14 +175,16 @@ def nvt_run(
     nvt_steps: int,
     timestep: int = 2,  # fs
     extra_reporters: list | None = None,
+    minimize: bool = False,
 ):
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
-    integrator = omm.MTSLangevinIntegrator(temperature * ou.kelvin, 0.1 / ou.picosecond, timestep * ou.femtoseconds,
-                                           [(0, 2), (1, 1)])
+    integrator = omm.MTSLangevinIntegrator(
+        temperature * ou.kelvin, 0.1 / ou.picosecond, timestep * ou.femtoseconds, [(0, 2), (1, 1)]
+    )
 
     state_reporter = app.StateDataReporter(
-        file=os.path.join(work_dir, 'nvt_state.csv'),
+        file=os.path.join(work_dir, "nvt_state.csv"),
         reportInterval=500,
         step=True,
         time=True,
@@ -192,13 +198,13 @@ def nvt_run(
         remainingTime=False,
         speed=True,
         elapsedTime=False,
-        separator=',',
+        separator=",",
         systemMass=None,
         totalSteps=None,
         append=False,
     )
     dcd_reporter = app.DCDReporter(
-        os.path.join(work_dir, 'nvt.dcd'),
+        os.path.join(work_dir, "nvt.dcd"),
         reportInterval=500,
         enforcePeriodicBox=False,
     )
@@ -206,14 +212,14 @@ def nvt_run(
     if extra_reporters:
         reporters.extend(extra_reporters)
     return openmm_run(
-        task_name='nvt',
+        task_name="nvt",
         top=top,
         system=system,
         positions=positions,
         integrator=integrator,
         reporter=reporters,
         work_dir=work_dir,
-        minimize=False,
+        minimize=minimize,
         box_vec=box_vec,
         steps=nvt_steps,
         temperature=temperature,
@@ -222,7 +228,7 @@ def nvt_run(
 
 def volume_calc(work_dir):
     with temporary_cd(work_dir):
-        csv_file = 'nvt_state.csv'
+        csv_file = "nvt_state.csv"
         result_df = pd.read_csv(csv_file)
         volume = result_df["Box Volume (nm^3)"].mean() * 1000
         temperature = result_df["Temperature (K)"].mean()
@@ -243,7 +249,7 @@ class DipoleReporter:
     """
     Reporter for recording the total dipole moment of a system using the AMOEBA force field.
     This version considers only permanent charges (monopoles) and induced dipoles.
-    
+
     Units:
     - Time: ps
     - Dipole components and magnitude: e*Angstrom
@@ -252,7 +258,7 @@ class DipoleReporter:
     def __init__(self, file_path, reportInterval, system):
         """
         Initialize the reporter.
-        
+
         Parameters
         ----------
         file_path : str
@@ -286,18 +292,18 @@ class DipoleReporter:
 
         # 3. Initialize the output file and write the header
         os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-        self._out = open(file_path, 'w')
-        self._out.write('time_ps,Mx_eA,My_eA,Mz_eA,M_mag_eA\n')
+        self._out = open(file_path, "w")
+        self._out.write("time_ps,Mx_eA,My_eA,Mz_eA,M_mag_eA\n")
         self._out.flush()
 
     def describeNextReport(self, simulation):
         """
         Describe the requirements for the next report.
-        periodic=False is crucial: it requests unwrapped coordinates where 
+        periodic=False is crucial: it requests unwrapped coordinates where
         molecules are kept whole across periodic boundaries.
         """
         steps = self._reportInterval - simulation.currentStep % self._reportInterval
-        return {'steps': steps, 'periodic': False, 'include': ['positions']}
+        return {"steps": steps, "periodic": False, "include": ["positions"]}
 
     def report(self, simulation, state):
         """
@@ -343,5 +349,5 @@ class DipoleReporter:
 
     def __del__(self):
         """Ensure the file is closed properly."""
-        if hasattr(self, '_out'):
+        if hasattr(self, "_out"):
             self._out.close()

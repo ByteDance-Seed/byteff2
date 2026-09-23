@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright (c) 2020 Zheng Gong
 # Copyright (c) 2025 ByteDance Ltd. and/or its affiliates.
 # SPDX-License-Identifier: MIT
@@ -17,17 +31,17 @@ from typing import Optional
 
 import openmm as omm
 import openmm.app as app
+from openmm.app.gromacstopfile import GromacsTopFile
 import openmm.unit as ou
 import pandas as pd
-from openmm.app.gromacstopfile import GromacsTopFile
 
-from bytemol.utils import temporary_cd
+from byteff2.bytemol.utils import temporary_cd
 
 from .md_run import openmm_run
 
 
 class ViscosityReporter(object):
-    '''
+    """
     ViscosityReporter report the viscosity using cosine periodic perturbation method.
     A integrator supporting this method is required.
     e.g. the VVIntegrator from https://github.com/z-gong/openmm-velocityVerlet.
@@ -38,11 +52,11 @@ class ViscosityReporter(object):
         The file to write to
     reportInterval : int
         The interval (in time steps) at which to write frames
-    '''
+    """
 
     def __init__(self, file, reportInterval):
         self._reportInterval = reportInterval
-        self._out = open(file, 'w')
+        self._out = open(file, "w")
         self._hasInitialized = False
 
     def describeNextReport(self, simulation):
@@ -63,7 +77,7 @@ class ViscosityReporter(object):
             positions should be wrapped to lie in a single periodic box.
         """
         steps = self._reportInterval - simulation.currentStep % self._reportInterval
-        return {'steps': steps, 'periodic': False, 'include': []}
+        return {"steps": steps, "periodic": False, "include": []}
 
     def report(self, simulation: app.Simulation, state):
         """Generate a report.
@@ -77,8 +91,9 @@ class ViscosityReporter(object):
         """
         if not self._hasInitialized:
             self._hasInitialized = True
-            print('#"Step"\t"Acceleration (nm/ps^2)"\t"VelocityAmplitude (nm/ps)"\t"1/Viscosity (1/Pa.s)"',
-                  file=self._out)
+            print(
+                '#"Step"\t"Acceleration (nm/ps^2)"\t"VelocityAmplitude (nm/ps)"\t"1/Viscosity (1/Pa.s)"', file=self._out
+            )
 
         ps = ou.picosecond
         nm = ou.nanometer
@@ -86,10 +101,10 @@ class ViscosityReporter(object):
         acceleration = simulation.integrator.getCosAcceleration().value_in_unit(nm / ps**2)
         vMax, invVis = simulation.integrator.getViscosity()
         vMax = vMax.value_in_unit(nm / ps)
-        invVis = invVis.value_in_unit((ou.pascal * ou.second)**-1)
-        print(simulation.currentStep, acceleration, vMax, invVis, sep='\t', file=self._out)
+        invVis = invVis.value_in_unit((ou.pascal * ou.second) ** -1)
+        print(simulation.currentStep, acceleration, vMax, invVis, sep="\t", file=self._out)
 
-        if hasattr(self._out, 'flush') and callable(self._out.flush):
+        if hasattr(self._out, "flush") and callable(self._out.flush):
             self._out.flush()
 
     def __del__(self):
@@ -108,6 +123,7 @@ def nonequ_run(
     top = copy.deepcopy(top)
     system = copy.deepcopy(system)
     from velocityverletplugin import VVIntegrator
+
     timestep = 1  # fs, MTS is not supported in VVIntegrator
     integrator = VVIntegrator(
         temperature=temperature * ou.kelvin,
@@ -120,9 +136,9 @@ def nonequ_run(
     )
     integrator.setUseMiddleScheme(True)
     integrator.setCosAcceleration(0.02)  # in openmm standard unit nm/ps^2
-    vis_reporter = ViscosityReporter(os.path.join(work_dir, 'viscosity.csv'), 50)
+    vis_reporter = ViscosityReporter(os.path.join(work_dir, "viscosity.csv"), 50)
     return openmm_run(
-        task_name='nonequ',
+        task_name="nonequ",
         top=top,
         system=system,
         positions=positions,
@@ -138,8 +154,8 @@ def nonequ_run(
 
 def viscosity_calc(work_dir):
     with temporary_cd(work_dir):
-        csv_file = 'viscosity.csv'
-        viscosity = pd.read_csv(csv_file, sep='\t')["1/Viscosity (1/Pa.s)"]
-        assert len(viscosity) >= 10000, 'viscosity trajectory too short'
+        csv_file = "viscosity.csv"
+        viscosity = pd.read_csv(csv_file, sep="\t")["1/Viscosity (1/Pa.s)"]
+        assert len(viscosity) >= 10000, "viscosity trajectory too short"
         vis_1 = viscosity[1000:]  # skip first 50 ps
         return 1 / vis_1.mean() * 1000

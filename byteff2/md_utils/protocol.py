@@ -1,0 +1,792 @@
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from enum import Enum
+import json
+import os
+import shutil
+import subprocess
+from typing import OrderedDict
+
+import ase.io as aio
+import numpy as np
+from numpy.typing import NDArray
+import openmm.app as app
+import pandas as pd
+from scipy import signal
+
+from byteff2.bytemol.core import Molecule
+from byteff2.bytemol.toolkit.gmxtool.topparse import RecordAtomType, RecordMolecule, Records, TopoFullSystem
+from byteff2.bytemol.utils import setup_default_logging
+from byteff2.md_utils.md_run import dcd_read, DipoleReporter, npt_run, nvt_run, rescale_box, volume_calc
+from byteff2.md_utils.onsager_conductivity import onsager_calc
+from byteff2.md_utils.viscosity import nonequ_run, viscosity_calc
+from byteff2.toolkit.gmxtool import GMXScript
+from byteff2.toolkit.openmmtool import generate_byteffpol_system
+from byteff2.train.utils import get_nb_params, load_pretrained_model
+from byteff2.utils.definitions import CHG_FACTOR
+
+
+logger = setup_default_logging()
+
+
+class ComponentType(Enum):
+    SOLVENT = 0
+    ANION = 1
+    CATION = 2
+    UNDEFINED = 3
+
+
+class Component:
+    def __init__(self, topo_mol):
+        self.name = topo_mol.name
+        self.atoms = topo_mol.atoms
+        self.net_charge = sum([atom.charge for atom in topo_mol.atoms])
+        if self.net_charge > 1e-5:
+            self.type = ComponentType.CATION
+            self.density = 0.25
+        elif self.net_charge < -1e-5:
+            self.type = ComponentType.ANION
+            self.density = 0.25
+        else:
+            self.type = ComponentType.SOLVENT
+            self.density = 0.9
+        self.molar_ratio = -1
+        self.molar_num = -1
+        self.molar_mass = sum([atom.mass for atom in topo_mol.atoms])
+        self.itp_records = None
+        self.atp_records = None
+
+
+def predict_density(component: dict):
+    density = 0
+    total_molar_ratio = 0
+    solvent = [c for c in component.values() if c.type == ComponentType.SOLVENT]
+    cation = [c for c in component.values() if c.type == ComponentType.CATION]
+    anion = [c for c in component.values() if c.type == ComponentType.ANION]
+    for c in solvent:
+        density += c.density * c.molar_num
+        total_molar_ratio += c.molar_num
+    sol_density = density / total_molar_ratio
+    sol_ratio = sol_density
+    # Add cation and anion
+    for c in cation:
+        sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
+    for c in anion:
+        sol_density += min(c.density * c.molar_num / total_molar_ratio * sol_ratio, 0.5)
+    return round(sol_density, 2)
+
+
+def search_mixture(mol_ratio, min_atoms, components):
+    # Pick a mixture whose total atom count just exceeds `min_atoms` while
+    # preserving `mol_ratio`.
+    num_atoms = np.array([len(component.atoms) for component in components.values()])
+    uni_mol_ratio = mol_ratio / np.min(mol_ratio)
+    min_count = int(np.ceil(min_atoms / sum(uni_mol_ratio * num_atoms)))
+    mix = np.round(uni_mol_ratio * min_count).astype(int)
+    total_atoms = int(round(sum(mix * num_atoms)))
+    return total_atoms, mix
+
+
+def predict_box(components, density):
+    factor = 0.11842
+    total_mass = sum([x.molar_num * x.molar_mass for x in components.values()])
+    estimate_box = (total_mass / density) ** (1 / 3) * factor
+    return round(estimate_box, 2)
+
+
+def load_topo(topo_dir, mol_name):
+    itp_records = Records.from_file(
+        f"{topo_dir}/{mol_name}.itp",
+        incdir=None,
+        allow_unknown=False,
+    )
+    atp_records = Records.from_file(
+        f"{topo_dir}/{mol_name}.atp",
+        incdir=None,
+        allow_unknown=False,
+    )
+    topparse = TopoFullSystem.from_records(itp_records.all + atp_records.all, sort_idx=False)
+    component = Component(topparse.mol_topos[0])
+    component.itp_records = itp_records
+    component.atp_records = atp_records
+    return component
+
+
+def generate_system_gro(components, working_dir, box):
+    script = GMXScript()
+    script.add('cd "$(dirname "$0")" ')
+    for i, c in enumerate(components.values()):
+        # Generate the box from the first component
+        if i == 0:
+            # Generate the box for components
+            script.init_gro_box(f"{c.name}.gro", box)
+            rest_molecules = c.molar_num - 1
+            if rest_molecules:
+                script.insert_molecules(f"{c.name}.gro", rest_molecules)
+            continue
+        script.insert_molecules(f"{c.name}.gro", c.molar_num)
+
+    # Add run md run command
+    script.finish()
+    script.write(f"{working_dir}/run_gmx.sh")
+
+
+def write_gro(mol: Molecule, save_path: str):
+    atoms_gro = mol.conformers[0].to_ase_atoms()
+    atoms_gro.set_array("residuenames", np.array([mol.name] * mol.natoms))
+    aio.write(save_path, atoms_gro)
+
+
+class Protocol:
+    def __init__(self, params_dir: str, output_dir: str, asset_root: str | os.PathLike | None = None):
+        os.makedirs(params_dir, exist_ok=True)
+        self.params_dir = params_dir
+        os.makedirs(output_dir, exist_ok=True)
+        self.output_dir = output_dir
+        self.asset_root = asset_root
+
+    def generate_ff_params(self, component_smiles: dict):
+        model = load_pretrained_model("ByteFF-Pol-25", asset_root=self.asset_root)
+        all_nb_params = {}
+
+        for mol_name, smiles in component_smiles.items():
+            logger.info(f"generating force field params for {mol_name}")
+            mol = Molecule.from_smiles(smiles, nconfs=1)
+            mol.name = mol_name
+            metadata, params, tfs, mol = get_nb_params(model, mol, write_to_itp=True)
+            tfs.write_itp(f"{self.params_dir}/{mol.name}.itp", separated_atp=True)
+            write_gro(mol, f"{self.params_dir}/{mol.name}.gro")
+            with open(f"{self.params_dir}/{mol.name}.json", "w") as f:
+                json.dump(params, f, indent=2)
+            with open(f"{self.params_dir}/{mol.name}_nb_params.json", "w") as file:
+                nb_params = {"metadata": metadata}
+                json.dump(nb_params, file, indent=2)
+            all_nb_params[mol_name] = params
+            all_nb_params["metadata"] = metadata
+
+        return all_nb_params
+
+    def build_system(self, total_atoms: int, components_ratio: dict, working_dir: str, build_gas: bool = False):
+        logger.info(f"building system for {components_ratio.keys()}")
+        # read and parse topo files
+        os.makedirs(working_dir, exist_ok=True)
+        components_temp = dict()
+        full_system_records, record_atomtype_names = [], []
+        system_charge = 0
+        for component_name, molar_ratio in components_ratio.items():
+            component = load_topo(self.params_dir, component_name)
+            component.molar_ratio = molar_ratio
+            components_temp[component_name] = component
+        components_temp = {
+            k: v for k, v in sorted(components_temp.items(), key=lambda item: item[1].molar_ratio, reverse=True)
+        }
+        solvent = [k for k, v in components_temp.items() if v.type == ComponentType.SOLVENT]
+        anion = [k for k, v in components_temp.items() if v.type == ComponentType.ANION]
+        cation = [k for k, v in components_temp.items() if v.type == ComponentType.CATION]
+        component_order = solvent + anion + cation
+        components = OrderedDict()
+        for component_name in component_order:
+            component = components_temp[component_name]
+            components[component_name] = component
+            for record in component.atp_records.all:
+                if isinstance(record, RecordAtomType):
+                    if record.name not in record_atomtype_names:
+                        record_atomtype_names.append(record.name)
+                        full_system_records.append(record)
+                else:
+                    full_system_records.append(record)
+            system_charge += component.molar_ratio * component.net_charge
+
+            full_system_records.extend(component.itp_records.all)
+            shutil.copy(f"{self.params_dir}/{component_name}.itp", f"{working_dir}/{component_name}.itp")
+            shutil.copy(f"{self.params_dir}/{component_name}.atp", f"{working_dir}/{component_name}.atp")
+            shutil.copy(f"{self.params_dir}/{component_name}.gro", f"{working_dir}/{component_name}.gro")
+        rounded_system_charge = round(system_charge)
+        assert abs(system_charge - rounded_system_charge) < 1e-2, (
+            f"System charge should be close to an integer, but got {system_charge}"
+        )
+        assert int(rounded_system_charge) == 0, f"System charge should be 0, but got {system_charge}"
+        full_topparse = TopoFullSystem.from_records(full_system_records, sort_idx=False)
+        if build_gas:
+            assert len(components) == 1, "Gas phase only support one component"
+            component = list(components.values())[0]
+            total_atoms = len(component.atoms)
+            with open(f"{working_dir}/{component.name}.gro", "r") as origin_gro_f:
+                lines = origin_gro_f.readlines()[:-1]
+            lines.append(" 100.00000 100.00000 100.00000\n")
+            with open(f"{working_dir}/solvent_salt_gas.gro", "w") as new_gro_f:
+                new_gro_f.writelines(lines)
+        input_mol_ratio = np.array(list(c.molar_ratio for c in components.values()))
+        real_total_atoms, mix = search_mixture(input_mol_ratio, total_atoms, components)
+
+        full_topparse.molecules = []
+        box_charge = 0
+        for idx, component in enumerate(components.values()):
+            component.molar_num = mix[idx]
+            full_topparse.molecules.append(RecordMolecule.from_text(f"{component.name} {component.molar_num}"))
+            box_charge += component.molar_num * component.net_charge
+        rounded_box_charge = round(box_charge)
+        assert abs(box_charge - rounded_box_charge) < 1e-2, (
+            f"Box charge should be close to an integer, but got {box_charge}"
+        )
+        assert int(rounded_box_charge) == 0, f"Box charge should be 0, but got {box_charge}"
+
+        init_density = predict_density(components)
+        init_box = predict_box(components, init_density)
+        itp_list = [f"{mol_name}.itp" for mol_name in components.keys()]
+        atp_list = [f"{mol_name}.atp" for mol_name in components.keys()]
+        mols = [[i] for i in range(len(components))]
+        with open(f"{working_dir}/system.top", "w") as f:
+            f.write(full_topparse.strs_system_top_atp_itp(itp_list, atp_list, mols)[0])
+        if build_gas:
+            shutil.copy(f"{working_dir}/solvent_salt_gas.gro", f"{self.params_dir}/solvent_salt_gas.gro")
+            shutil.copy(f"{working_dir}/system.top", f"{self.params_dir}/system_gas.top")
+            return components
+
+        box = init_box
+        for _ in range(5):
+            generate_system_gro(components, working_dir, box)
+            command = f"cd {working_dir} && bash -x run_gmx.sh"
+            try:
+                child = subprocess.run(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=300,
+                    check=True,
+                )
+            except subprocess.TimeoutExpired:
+                print("Script time out!")
+                box *= 1.05
+                continue
+            if child.returncode != 0:
+                print("Script gmx failed")
+                raise subprocess.CalledProcessError(child.returncode, command)
+            gro_file = os.path.join(working_dir, "solvent_salt.gro")
+            with open(gro_file, "r") as f:
+                gro_total_atoms = int(f.readlines()[1].strip().split()[0])
+            if real_total_atoms > gro_total_atoms:
+                box *= 1.05
+            else:
+                break
+        shutil.copy(f"{working_dir}/solvent_salt.gro", f"{self.params_dir}/solvent_salt.gro")
+        shutil.copy(f"{working_dir}/system.top", f"{self.params_dir}/system.top")
+        return components
+
+    def run_protocol(
+        self,
+    ):
+        raise NotImplementedError
+
+    def post_process(
+        self,
+    ):
+        raise NotImplementedError
+
+
+class DensityProtocol(Protocol):
+    def __init__(self, config: dict):
+        super().__init__(config["params_dir"], config["output_dir"], asset_root=config.get("asset_root"))
+        self.config = config
+
+    def run_protocol(self):
+        logger.info("running density protocol")
+        nonbonded_params = self.generate_ff_params(self.config["smiles"])
+        _ = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_byteffpol_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+
+        npt_run(
+            top=input_top,
+            system=input_system,
+            positions=input_positions,
+            temperature=self.config["temperature"],
+            npt_steps=1500000,
+            work_dir=self.output_dir,
+        )
+        logger.info("Finished running density protocol")
+
+    def post_process(
+        self,
+    ):
+        csv_file = os.path.join(self.output_dir, "npt_state.csv")
+        density = pd.read_csv(csv_file)["Density (g/mL)"]
+
+        dd = []
+        for _ in range(10):
+            dd.append(np.mean(np.random.choice(density[-1000:], 100)))
+        density, density_std = np.mean(dd), np.std(dd)
+        result = {
+            "density": density,
+            "density_std": density_std,
+        }
+        with open(os.path.join(self.output_dir, "density_results.json"), "w") as f:
+            json.dump(result, f, indent=4)
+        logger.info(result)
+        return result
+
+
+class TransportProtocol(Protocol):
+    def __init__(self, config: dict):
+        super().__init__(config["params_dir"], config["output_dir"], asset_root=config.get("asset_root"))
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info("running transport protocol")
+        npt_steps = 4000000
+        nvt_steps = 10000000
+        nonequ_steps = 1000000
+        nonbonded_params = self.generate_ff_params(self.config["smiles"])
+        self.components = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_byteffpol_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        logger.info("npt run")
+        npt_positions, npt_box_vec = npt_run(
+            input_top,
+            input_system,
+            input_positions,
+            temperature=self.config["temperature"],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+        rescale_positions, rescale_box_vec = rescale_box(npt_positions, npt_box_vec, work_dir=self.output_dir)
+        logger.info("nvt run")
+        nvt_positions, nvt_box_vec = nvt_run(
+            input_top,
+            input_system,
+            rescale_positions,
+            rescale_box_vec,
+            temperature=self.config["temperature"],
+            work_dir=self.output_dir,
+            nvt_steps=nvt_steps,
+        )
+        logger.info("nonequ run")
+        nonequ_run(
+            input_top,
+            input_system,
+            nvt_positions,
+            nvt_box_vec,
+            temperature=self.config["temperature"],
+            work_dir=self.output_dir,
+            nonequ_steps=nonequ_steps,
+        )
+
+    def post_process(
+        self,
+    ):
+        logger.info("post processing transport protocol")
+        vis = viscosity_calc(self.output_dir)
+        md_volume, md_temperature = volume_calc(self.output_dir)
+        logger.info("viscosity: %.3f", vis)
+
+        nvt_positions = dcd_read(os.path.join(self.output_dir, "nvt.dcd"))
+        species_mass_dict, species_number_dict, species_charges_dict = {}, {}, {}
+        for mol_name, topo_mol in self.components.items():
+            species_mass_dict[mol_name] = [atom.mass for atom in topo_mol.atoms]
+            species_number_dict[mol_name] = topo_mol.molar_num
+            tot_charge = sum([atom.charge for atom in topo_mol.atoms])
+            rounded_tot_charge = round(tot_charge)
+            assert abs(tot_charge - rounded_tot_charge) < 1e-2, (
+                f"Charge of {mol_name} should be close to an integer, but got {tot_charge}"
+            )
+            species_charges_dict[mol_name] = int(rounded_tot_charge)
+        species_order = list(self.components.keys())
+
+        results = onsager_calc(
+            species_order,
+            species_mass_dict,
+            species_number_dict,
+            species_charges_dict,
+            md_volume,
+            vis,
+            md_temperature,
+            nvt_positions,
+        )
+        results["viscosity"] = vis
+        results["components"] = species_order
+        with open(os.path.join(self.output_dir, "results.json"), "w") as f:
+            json.dump(results, f, indent=2)
+
+
+class HVapProtocol(Protocol):
+    def __init__(self, config: dict):
+        super().__init__(config["params_dir"], config["output_dir"], asset_root=config.get("asset_root"))
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info("running hvap protocol")
+        npt_steps = 1500000
+        nvt_steps = 5000000
+        nonbonded_params = self.generate_ff_params(self.config["smiles"])
+        self.components = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+        )
+        _ = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+            build_gas=True,
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        gas_gro_file = f"{self.params_dir}/solvent_salt_gas.gro"
+        gas_top_file = f"{self.params_dir}/system_gas.top"
+
+        logger.info("running liquid phase")
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        liq_top, liq_system = generate_byteffpol_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        npt_run(
+            top=liq_top,
+            system=liq_system,
+            positions=input_positions,
+            temperature=self.config["temperature"],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+        logger.info("running gas phase")
+        grofileparser = app.GromacsGroFile(gas_gro_file)
+        input_positions = grofileparser.positions
+        gas_top, gas_system = generate_byteffpol_system(
+            gas_top_file,
+            nonbonded_params,
+            unit_cell=None,
+        )
+        nvt_run(
+            top=gas_top,
+            system=gas_system,
+            positions=input_positions,
+            box_vec=None,
+            temperature=self.config["temperature"],
+            nvt_steps=nvt_steps,
+            work_dir=self.output_dir,
+            timestep=0.2,
+            minimize=True,
+        )
+
+    def post_process(
+        self,
+    ):
+        assert len(self.components) == 1
+        nmols = sum([c.molar_num for c in self.components.values()])
+        csv_file = os.path.join(self.output_dir, "npt_state.csv")
+        df = pd.read_csv(csv_file)
+        density = df["Density (g/mL)"]
+        dd = []
+        for _ in range(10):
+            dd.append(np.mean(np.random.choice(density[-1000:], 100)))
+        density, density_std = np.mean(dd), np.std(dd)
+
+        e_liquid = df["Potential Energy (kJ/mole)"]
+        el = []
+        for _ in range(10):
+            el.append(np.mean(np.random.choice(e_liquid[-1000:], 100)) / nmols)
+        e_liquid, e_liquid_std = np.mean(el), np.std(el)
+
+        csv_file = os.path.join(self.output_dir, "nvt_state.csv")
+        df = pd.read_csv(csv_file)
+        e_gas = df["Potential Energy (kJ/mole)"]
+        eg = []
+        for _ in range(10):
+            eg.append(np.mean(np.random.choice(e_gas[2000:], 100)))
+        e_gas, e_gas_std = np.mean(eg), np.std(eg)
+
+        hvap = (e_gas - e_liquid) / 4.184 + 8.314 * self.config["temperature"] / 1000 / 4.184  # kcal/mol
+        hvap_std = np.sqrt(e_gas_std**2 + e_liquid_std**2) / 4.184
+
+        result = {
+            "density": density,
+            "density_std": density_std,
+            "hvap": hvap,
+            "hvap_std": hvap_std,
+        }
+
+        with open(os.path.join(self.output_dir, "hvap_results.json"), "w") as f:
+            json.dump(result, f, indent=4)
+        logger.info(result)
+        return result
+
+
+class DielectricProtocol(Protocol):
+    def __init__(self, config: dict):
+        super().__init__(config["params_dir"], config["output_dir"], asset_root=config.get("asset_root"))
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info("running dielectric protocol")
+        # steps configurable via JSON; defaults provide adequate sampling
+        npt_steps = int(self.config.get("npt_steps", 2000000))
+        nvt_steps = int(self.config.get("nvt_steps", 6000000))
+        dipole_interval = int(self.config.get("dipole_interval", 500))
+        nonbonded_params = self.generate_ff_params(self.config["smiles"])
+        self.components = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_byteffpol_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        logger.info("npt run")
+        npt_positions, npt_box_vec = npt_run(
+            input_top,
+            input_system,
+            input_positions,
+            temperature=self.config["temperature"],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+        rescale_positions, rescale_box_vec = rescale_box(npt_positions, npt_box_vec, work_dir=self.output_dir)
+        logger.info("nvt run with dipole recording")
+        dipole_reporter = DipoleReporter(
+            file_path=os.path.join(self.output_dir, "dipole.csv"),
+            reportInterval=dipole_interval,
+            system=input_system,
+        )
+        _nvt_positions, _nvt_box_vec = nvt_run(
+            input_top,
+            input_system,
+            rescale_positions,
+            rescale_box_vec,
+            temperature=self.config["temperature"],
+            work_dir=self.output_dir,
+            nvt_steps=nvt_steps,
+            extra_reporters=[dipole_reporter],
+        )
+
+    def post_process(
+        self,
+    ):
+
+        def _correlate_1d(in1: NDArray, in2: NDArray, average: bool) -> tuple[NDArray, NDArray]:
+            N = len(in1)
+            assert N == len(in2)
+
+            result = signal.correlate(in1, in2, mode="full", method="auto")
+            c12 = result[N - 1 :]
+            c21 = result[::-1][N - 1 :]
+            if average:
+                div = np.arange(N, 0, -1)
+                c12 = c12 / div
+                c21 = c21 / div
+                # "c12 /= div; c21 /= div" will not work because result[N-1]
+                # will be divided by div[0]**2 due to the in-place operation.
+            return c12, c21
+
+        def correlate(in1: NDArray, in2: NDArray, average: bool = True) -> tuple[NDArray, NDArray]:
+            shape1 = in1.shape
+            dim1 = len(shape1)
+            assert dim1 in (1, 2)
+            if dim1 == 1:
+                return _correlate_1d(in1, in2, average)
+            assert shape1 == in2.shape
+
+            N, D = shape1
+            c12, c21 = np.zeros(N), np.zeros(N)
+            for i in range(D):
+                c12i, c21i = _correlate_1d(in1[:, i], in2[:, i], average)
+                c12 += c12i
+                c21 += c21i
+            return c12, c21
+
+        def calculate_dipole_autocorrelation(Mx, My, Mz):
+            """Calculate dipole moment autocorrelation function (DACF)"""
+            # Create dipole moment vector
+            dipole = np.vstack([Mx, My, Mz]).T
+
+            # Calculate autocorrelation function
+            dacf, _ = correlate(dipole, dipole, average=True)
+
+            return dacf
+
+        def calculate_correlation_time(dacf, dt):
+            """
+            Calculate correlation time from dipole autocorrelation function.
+
+            Parameters
+            ----------
+            dacf : np.ndarray
+                Dipole autocorrelation function
+            dt : float
+                Time step between frames (in ps)
+
+            Returns
+            -------
+            correlation_time : float
+                Correlation time (in ps)
+            """
+            dacf = dacf / dacf[0]
+            under_cutoff = np.where(dacf < 0.05)[0]
+            if len(under_cutoff) == 0:
+                cutoff = len(dacf)
+            else:
+                cutoff = under_cutoff[0]
+
+            # Integrate DACF using trapezoidal rule to get correlation time
+            correlation_time = np.trapezoid(dacf[:cutoff], dx=dt)
+
+            return correlation_time
+
+        logger.info("post processing dielectric protocol")
+        # Read dipole series and thermodynamic quantities
+        dip_csv = os.path.join(self.output_dir, "dipole.csv")
+        df = pd.read_csv(dip_csv)
+        md_volume_A3, _ = volume_calc(self.output_dir)
+
+        # use later part of trajectory to avoid initial relaxation bias
+        start_index = int(len(df) * 0.2)
+        Mx = df["Mx_eA"].values[start_index:]
+        My = df["My_eA"].values[start_index:]
+        Mz = df["Mz_eA"].values[start_index:]
+
+        M2_mean = np.mean(Mx**2 + My**2 + Mz**2)
+        M_mean_sq = np.mean(Mx) ** 2 + np.mean(My) ** 2 + np.mean(Mz) ** 2
+        fluct = float(M2_mean - M_mean_sq)
+
+        eps0_star = 1.0 / (4.0 * np.pi * CHG_FACTOR)
+        R_gas = 1.9872036 * 1e-3
+        V = md_volume_A3  # in A^3
+        T = self.config["temperature"]  # in K
+
+        dielectric = 1.0 + fluct / (3.0 * eps0_star * V * R_gas * T)
+
+        # Calculate dipole autocorrelation function and correlation time
+        dt = 2.0 * self.config.get("dipole_interval", 500) * 1e-3  # ps (timestep in fs, every N steps)
+        dacf = calculate_dipole_autocorrelation(Mx, My, Mz)
+        correlation_time = calculate_correlation_time(dacf, dt)
+
+        result = {
+            "dielectric": float(dielectric),
+            "volume": float(md_volume_A3),
+            "correlation_time": float(correlation_time),
+            "units": {
+                "dielectric": "dimensionless",
+                "volume": "Angstrom^3",
+                "correlation_time": "ps",
+            },
+        }
+        with open(os.path.join(self.output_dir, "dielectric_results.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        logger.info(result)
+        return result
+
+
+class CompressibilityProtocol(Protocol):
+    def __init__(self, config: dict):
+        super().__init__(config["params_dir"], config["output_dir"], asset_root=config.get("asset_root"))
+        self.config = config
+        self.components = None
+
+    def run_protocol(self):
+        logger.info("running compressibility protocol")
+        # steps configurable via JSON; defaults provide adequate sampling
+        npt_steps = int(self.config.get("npt_steps", 5000000))
+        assert npt_steps > 1000000, "npt_steps must be greater than 1000000"
+        nonbonded_params = self.generate_ff_params(self.config["smiles"])
+        self.components = self.build_system(
+            self.config["natoms"],
+            self.config["components"],
+            self.config["working_dir"],
+        )
+        gro_file = f"{self.params_dir}/solvent_salt.gro"
+        top_file = f"{self.params_dir}/system.top"
+        grofileparser = app.GromacsGroFile(gro_file)
+        input_positions = grofileparser.positions
+        unit_cell = grofileparser.getUnitCellDimensions()
+        input_top, input_system = generate_byteffpol_system(
+            top_file,
+            nonbonded_params,
+            unit_cell,
+        )
+        logger.info("npt run")
+        _npt_positions, _npt_box_vec = npt_run(
+            input_top,
+            input_system,
+            input_positions,
+            temperature=self.config["temperature"],
+            npt_steps=npt_steps,
+            work_dir=self.output_dir,
+        )
+
+    def post_process(
+        self,
+    ):
+
+        def compressibility(volume, temp):
+            kb = 1.380649e-23  # J/K
+            v_mean = np.mean(volume)
+            dv2_mean = np.mean((volume - v_mean) ** 2)
+            comp = dv2_mean / (v_mean * kb * temp) * 1e9  # GPa^-1
+            return comp
+
+        logger.info("post processing compressibility protocol")
+        # Read dipole series and thermodynamic quantities
+        csv_file = os.path.join(self.output_dir, "npt_state.csv")
+        volume_m3 = pd.read_csv(csv_file)["Box Volume (nm^3)"].to_numpy() * 1e-27
+        skip_steps = 1000  # skip first 1 ns
+        comp = compressibility(volume_m3[skip_steps:], self.config["temperature"])
+        result = {
+            "compressibility": float(comp),
+            "units": {
+                "compressibility": "GPa^-1",
+            },
+        }
+        with open(os.path.join(self.output_dir, "compressibility_results.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        logger.info(result)
+        return result

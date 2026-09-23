@@ -20,79 +20,99 @@ from torch_geometric.utils import scatter
 
 from byteff2.data import Data
 from byteff2.model.gnn import EGT, GAT, GINE, BasicGNN
-from byteff2.utils.definitions import MAX_CONNECTIVITY, MAX_FORMAL_CHARGE, MAX_RING_SIZE, SUPPORTED_ELEMENTS, BondOrder
+from byteff2.utils.definitions import (
+    MAX_CONNECTIVITY,
+    MAX_FORMAL_CHARGE,
+    MAX_RING_SIZE,
+    SUPPORTED_ELEMENTS_NUM,
+    BondOrder,
+)
 
 
 def equi_features(features: Tensor, equi_index: Tensor) -> Tensor:
-    equi_value = scatter(features, equi_index, 0, reduce='mean')
+    equi_value = scatter(features, equi_index, 0, reduce="mean")
     return equi_value[equi_index]
 
 
 class FeatureLayer(nn.Module):
-    """ atom features and/or bond features
-    """
+    """atom features and/or bond features"""
 
     def __init__(
-            self,
-            atom_embedding_dim=16,
-            connectivity_embedding_dim=8,
-            ring_con_embedding_dim=8,
-            min_ring_size_embedding_dim=8,
-            fm_chg_embedding_dim=8,
-            bond_ring_embedding_dim=8,
-            bond_order_embedding_dim=8,
-            scale_grad_by_freq=False,
-            node_mlp_dims=(32, 32, 3),  # (hidden_dim, out_dim, layers)
-            edge_mlp_dims=(32, 32, 3),  # (hidden_dim, out_dim, layers)
-            act='gelu'):
+        self,
+        atom_embedding_dim=16,
+        connectivity_embedding_dim=8,
+        ring_con_embedding_dim=8,
+        min_ring_size_embedding_dim=8,
+        fm_chg_embedding_dim=8,
+        bond_ring_embedding_dim=8,
+        bond_order_embedding_dim=8,
+        scale_grad_by_freq=False,
+        node_mlp_dims=(32, 32, 3),  # (hidden_dim, out_dim, layers)
+        edge_mlp_dims=(32, 32, 3),  # (hidden_dim, out_dim, layers)
+        act="gelu",
+    ):
         super().__init__()
 
         self.atom_embedding_dim = atom_embedding_dim
-        self.atom_embedding = nn.Embedding(num_embeddings=len(SUPPORTED_ELEMENTS),
-                                           embedding_dim=atom_embedding_dim,
-                                           scale_grad_by_freq=scale_grad_by_freq)
+        self.atom_embedding = nn.Embedding(
+            num_embeddings=SUPPORTED_ELEMENTS_NUM,
+            embedding_dim=atom_embedding_dim,
+            scale_grad_by_freq=scale_grad_by_freq,
+        )
         self.connectivity_embedding_dim = connectivity_embedding_dim
-        self.connectivity_embedding = nn.Embedding(num_embeddings=MAX_CONNECTIVITY + 1,
-                                                   embedding_dim=connectivity_embedding_dim,
-                                                   scale_grad_by_freq=scale_grad_by_freq)
+        self.connectivity_embedding = nn.Embedding(
+            num_embeddings=MAX_CONNECTIVITY + 1,
+            embedding_dim=connectivity_embedding_dim,
+            scale_grad_by_freq=scale_grad_by_freq,
+        )
         self.fm_chg_embedding_dim = fm_chg_embedding_dim
-        self.fm_chg_embedding = nn.Embedding(num_embeddings=MAX_FORMAL_CHARGE * 2 + 1,
-                                             embedding_dim=fm_chg_embedding_dim,
-                                             scale_grad_by_freq=scale_grad_by_freq)
+        self.fm_chg_embedding = nn.Embedding(
+            num_embeddings=MAX_FORMAL_CHARGE * 2 + 1,
+            embedding_dim=fm_chg_embedding_dim,
+            scale_grad_by_freq=scale_grad_by_freq,
+        )
         self.ring_con_embedding_dim = ring_con_embedding_dim
-        self.ring_con_embedding = nn.Embedding(num_embeddings=MAX_CONNECTIVITY + 1,
-                                               embedding_dim=ring_con_embedding_dim,
-                                               scale_grad_by_freq=scale_grad_by_freq)
+        self.ring_con_embedding = nn.Embedding(
+            num_embeddings=MAX_CONNECTIVITY + 1,
+            embedding_dim=ring_con_embedding_dim,
+            scale_grad_by_freq=scale_grad_by_freq,
+        )
         self.min_ring_size_embedding_dim = min_ring_size_embedding_dim
-        self.min_ring_size_embedding = nn.Embedding(num_embeddings=MAX_RING_SIZE + 1,
-                                                    embedding_dim=min_ring_size_embedding_dim,
-                                                    scale_grad_by_freq=scale_grad_by_freq)
+        self.min_ring_size_embedding = nn.Embedding(
+            num_embeddings=MAX_RING_SIZE + 1,
+            embedding_dim=min_ring_size_embedding_dim,
+            scale_grad_by_freq=scale_grad_by_freq,
+        )
 
         self.bond_ring_embedding_dim = bond_ring_embedding_dim
-        self.bond_ring_embedding = nn.Embedding(num_embeddings=2,
-                                                embedding_dim=bond_ring_embedding_dim,
-                                                scale_grad_by_freq=scale_grad_by_freq)
+        self.bond_ring_embedding = nn.Embedding(
+            num_embeddings=2, embedding_dim=bond_ring_embedding_dim, scale_grad_by_freq=scale_grad_by_freq
+        )
         self.bond_order_embedding_dim = bond_order_embedding_dim
-        self.bond_order_embedding = nn.Embedding(num_embeddings=len(BondOrder),
-                                                 embedding_dim=bond_order_embedding_dim,
-                                                 scale_grad_by_freq=scale_grad_by_freq)
+        self.bond_order_embedding = nn.Embedding(
+            num_embeddings=len(BondOrder), embedding_dim=bond_order_embedding_dim, scale_grad_by_freq=scale_grad_by_freq
+        )
 
         # node mlp
-        self.node_mlp = MLP(in_channels=self.raw_node_dim,
-                            hidden_channels=node_mlp_dims[0],
-                            out_channels=node_mlp_dims[1],
-                            num_layers=node_mlp_dims[2],
-                            norm=None,
-                            act=act,
-                            plain_last=False)
+        self.node_mlp = MLP(
+            in_channels=self.raw_node_dim,
+            hidden_channels=node_mlp_dims[0],
+            out_channels=node_mlp_dims[1],
+            num_layers=node_mlp_dims[2],
+            norm=None,
+            act=act,
+            plain_last=False,
+        )
         # edge mlp
-        self.edge_mlp = MLP(in_channels=self.raw_edge_dim,
-                            hidden_channels=edge_mlp_dims[0],
-                            out_channels=edge_mlp_dims[1],
-                            num_layers=edge_mlp_dims[2],
-                            norm=None,
-                            act=act,
-                            plain_last=False)
+        self.edge_mlp = MLP(
+            in_channels=self.raw_edge_dim,
+            hidden_channels=edge_mlp_dims[0],
+            out_channels=edge_mlp_dims[1],
+            num_layers=edge_mlp_dims[2],
+            norm=None,
+            act=act,
+            plain_last=False,
+        )
 
         self.node_out_dim = node_mlp_dims[1]
         self.edge_out_dim = edge_mlp_dims[1]
@@ -100,8 +120,13 @@ class FeatureLayer(nn.Module):
     @property
     def raw_node_dim(self) -> int:
         """dim for raw node feature"""
-        return self.atom_embedding_dim + self.connectivity_embedding_dim + self.fm_chg_embedding_dim \
-                + self.ring_con_embedding_dim + self.min_ring_size_embedding_dim
+        return (
+            self.atom_embedding_dim
+            + self.connectivity_embedding_dim
+            + self.fm_chg_embedding_dim
+            + self.ring_con_embedding_dim
+            + self.min_ring_size_embedding_dim
+        )
 
     @property
     def raw_edge_dim(self) -> int:
@@ -109,7 +134,7 @@ class FeatureLayer(nn.Module):
         return self.bond_order_embedding_dim + self.bond_ring_embedding_dim
 
     def reset_parameters(self):
-        '''Reset parameters using kaiming_uniform (default)'''
+        """Reset parameters using kaiming_uniform (default)"""
         self.atom_embedding.reset_parameters()
         self.connectivity_embedding.reset_parameters()
         self.fm_chg_embedding.reset_parameters()
@@ -128,8 +153,8 @@ class FeatureLayer(nn.Module):
         embeddings.append(self.atom_embedding(x[:, 0]))  # [natoms, atom_embedding_dim]
         embeddings.append(self.connectivity_embedding(x[:, 1]))  # [natoms, connectivity_embedding_dim]
         embeddings.append(
-            self.fm_chg_embedding(torch.clamp(x[:, 2] + MAX_FORMAL_CHARGE, min=0,
-                                              max=2 * MAX_FORMAL_CHARGE)))  # [natoms, fm_chg_embedding_dim]
+            self.fm_chg_embedding(torch.clamp(x[:, 2] + MAX_FORMAL_CHARGE, min=0, max=2 * MAX_FORMAL_CHARGE))
+        )  # [natoms, fm_chg_embedding_dim]
         embeddings.append(self.ring_con_embedding(x[:, 3]))  # [natoms, ring_con_embedding_dim]
         embeddings.append(self.min_ring_size_embedding(x[:, 4]))  # [natoms, min_ring_size_embedding_dim]
         node_features = torch.concat(embeddings, dim=-1)
@@ -147,38 +172,38 @@ class FeatureLayer(nn.Module):
         return edge_features
 
     def forward(self, graph: Data) -> tuple[Tensor, Tensor]:
-        """ return node and edge features
-        """
+        """return node and edge features"""
         x_h = self.get_node_features(graph)
         e_h = self.get_edge_features(graph)
         return x_h, e_h
 
 
 class GNNLayer(Module):
-
-    gnn_map: dict[str, BasicGNN] = {'EGT': EGT, 'GINE': GINE, 'GAT': GAT}
+    gnn_map: dict[str, BasicGNN] = {"EGT": EGT, "GINE": GINE, "GAT": GAT}
 
     def __init__(
-            self,
-            node_in_dim,
-            edge_in_dim,
-            gnn_type='EGT',
-            gnn_dims=(32, 32, 3),  #   # (hidden_dim, out_dim, layers)
-            act='gelu',
-            jk=None,
-            **kwargs,
+        self,
+        node_in_dim,
+        edge_in_dim,
+        gnn_type="EGT",
+        gnn_dims=(32, 32, 3),  #   # (hidden_dim, out_dim, layers)
+        act="gelu",
+        jk=None,
+        **kwargs,
     ):
         super().__init__()
 
         self.node_out_dim = gnn_dims[1]
         self.edge_out_dim = edge_in_dim
-        self.gnn: BasicGNN = self.gnn_map[gnn_type](in_channels=node_in_dim,
-                                                    hidden_channels=gnn_dims[0],
-                                                    out_channels=gnn_dims[1],
-                                                    num_layers=gnn_dims[2],
-                                                    act=act,
-                                                    jk=jk,
-                                                    **kwargs)
+        self.gnn: BasicGNN = self.gnn_map[gnn_type](
+            in_channels=node_in_dim,
+            hidden_channels=gnn_dims[0],
+            out_channels=gnn_dims[1],
+            num_layers=gnn_dims[2],
+            act=act,
+            jk=jk,
+            **kwargs,
+        )
         self.edge_in_lin = Linear(edge_in_dim, node_in_dim)
         self.edge_out_lin = Linear(self.node_out_dim, edge_in_dim)
 

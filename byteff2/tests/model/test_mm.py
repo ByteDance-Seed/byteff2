@@ -23,10 +23,10 @@ from byteff2.tests.data.test_dataset import create_mono_dataset
 
 def test_pre_mm_bonded():
 
-    mapped_smiles = '[C:1](=[O:2])([C:3]([H:5])([H:6])[H:7])[H:4]'
-    data = GraphData('test', mapped_smiles)
+    mapped_smiles = "[C:1](=[O:2])([C:3]([H:5])([H:6])[H:7])[H:4]"
+    data = GraphData("test", mapped_smiles)
 
-    model = Graph2DBlock(gnn_layer={'gnn_type': 'GINE'})
+    model = Graph2DBlock(gnn_layer={"gnn_type": "GINE"})
 
     x_h, e_h, _ = model(data)
 
@@ -34,12 +34,12 @@ def test_pre_mm_bonded():
 
     params = premm_layer(data, x_h, e_h)
 
-    for p in ['bond_k', 'bond_r0', 'angle_k', 'angle_d0', 'proper_k']:
-        pp = 'PreMMBonded.' + p
+    for p in ["bond_k", "bond_r0", "angle_k", "angle_d0", "proper_k"]:
+        pp = "PreMMBonded." + p
         assert (params[pp][-1, 0] - params[pp][-2, 0]).abs().max() < 1e-4
         assert (params[pp][-1, 0] - params[pp][-3, 0]).abs().max() < 1e-4
 
-    assert params['PreMMBonded.improper_k'].shape == (1, 1)
+    assert params["PreMMBonded.improper_k"].shape == (1, 1)
 
 
 def test_mm_bonded(tmp_path):
@@ -57,3 +57,20 @@ def test_mm_bonded(tmp_path):
     energy, forces = mm_layer(data, x_h, e_h, ff_params)
     assert energy.shape == (data.counts.shape[0], data.coords.shape[1])
     assert forces.shape == data.coords.shape
+
+
+def test_mm_hessian(tmp_path):
+    dim = 64
+    premm_layer = PreMMBonded(dim, dim)
+    mm_layer = MMBonded(dim, dim)
+
+    _, dataset = create_mono_dataset(tmp_path)
+    dataloader = DataLoader(dataset, batch_size=40, shuffle=False, collate_fn=collate_data)
+    data: MonoData = next(iter(dataloader))
+
+    x_h, e_h = torch.rand((data.node_features.shape[0], dim)), torch.rand((data.edge_features.shape[0], dim))
+    ff_params = premm_layer(data, x_h, e_h)
+    energy, forces = mm_layer(data, x_h, e_h, ff_params, calc_partial_hessian=True)
+    assert energy.shape == (data.counts.shape[0], data.coords.shape[1])
+    assert forces.shape == data.coords.shape
+    assert ff_params["MMBonded.bond_hessian"].shape == torch.Size([590, 10, 4, 9])
